@@ -20,6 +20,7 @@
 #include "input_chunker.h"
 #include "logger.h"
 #include "string_buffer.h"
+#include "readline_prompt.h"
 #include "tui.h"
 
 typedef struct {
@@ -101,6 +102,9 @@ static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *p
   } else if (config->use_tui) {
     logger_log(logger, LOG_LEVEL_INFO, "Launching ncurses TUI to capture payload");
     rc = tui_capture_payload(config, &payload->data, &payload->length, &error);
+  } else if (config->use_readline_prompt) {
+    logger_log(logger, LOG_LEVEL_INFO, "Launching GNU Readline prompt to capture payload");
+    rc = readline_capture_payload(config, &payload->data, &payload->length, &error);
   } else {
     assign_error(&error, "No input source selected. Provide --input-file, --stdin, --inline-text, or enable the TUI.");
     rc = -1;

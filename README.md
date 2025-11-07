@@ -1,6 +1,6 @@
 # deepseek-mpi
 
-Distributed TUI client for the DeepSeek Platform API. The utility slices very large text inputs, pushes the chunks to DeepSeek in parallel with MPI ranks, and mirrors results to both the console and a rotating log file. CentOS 7 users can rely on Autotools for predictable builds, while Doxygen keeps the codebase documented.
+Distributed TUI client for the DeepSeek Platform API. The utility slices very large text inputs, pushes the chunks to DeepSeek in parallel with MPI ranks, and mirrors results to both the console and a rotating log file. CentOS 7 users can rely on Autotools for predictable builds, while Doxygen keeps the codebase documented. The canonical home is the [`Deepseek-APIs/deepseek-mpi`](https://github.com/Deepseek-APIs/deepseek-mpi) repository, which packages the TUI, CLI, MPI glue, docs, and tests together.
 
 ## Features
 - **MPI-driven parallelism** – each rank owns a disjoint set of chunks so API traffic scales horizontally.
@@ -12,11 +12,24 @@ Distributed TUI client for the DeepSeek Platform API. The utility slices very la
 - **Response archival** – optional `--response-dir` switch persists every chunk response as JSON for audit trails.
 - **Deepseek wrapper** – launch `deepseek_wrapper` for a conversational ncurses experience (Codex-like) that automatically spawns MPI jobs.
 
+## Documentation & GitBook
+
+The repository includes a GitBook-ready documentation tree under `/docs` with a `SUMMARY.md` in the repo root. Key pages:
+
+- [docs/README.md](docs/README.md) – landing page for the GitBook space.
+- [docs/quickstart.md](docs/quickstart.md) – clean-room builds, dependency installs, running, and testing.
+- [docs/cli.md](docs/cli.md) – full CLI flag reference grouped by category.
+- [docs/configuration.md](docs/configuration.md) – config files, environment variables, and default values.
+- [docs/gitbook.md](docs/gitbook.md) – step-by-step instructions for connecting this repo to GitBook, polishing the space, and automating syncs.
+
+Import the repo into GitBook (Organization → New Space → Import from GitHub) and point it at `main`; GitBook will automatically pick up `SUMMARY.md` for the sidebar.
+
 ## Requirements
 - GCC or Clang (CentOS 7 ships GCC 4.8+)
 - OpenMPI or MPICH providing `mpicc`
 - libcurl
 - ncurses
+- readline
 - Autotools toolchain (autoconf, automake, libtool)
 - Doxygen (optional but recommended for docs)
 - Optional: `libmagic`, `libxml2`, and `libarchive` for richer attachment parsing inside the wrapper (CentOS 7 packages: `file-devel`, `libxml2-devel`, `libarchive-devel`). Without them, files still upload via base64.
@@ -25,7 +38,7 @@ Install dependencies on CentOS 7 (adjust for your MPI flavor):
 
 ```bash
 sudo yum groupinstall -y "Development Tools"
-sudo yum install -y openmpi openmpi-devel libcurl-devel ncurses-devel autoconf automake libtool doxygen
+sudo yum install -y openmpi openmpi-devel libcurl-devel ncurses-devel readline-devel autoconf automake libtool doxygen
 ```
 
 ## Bootstrapping & Building
@@ -66,6 +79,7 @@ open doc/html/index.html
 - `--dry-run` skips HTTP calls but keeps MPI plumbing and logging
 - `--response-dir responses/` streams each chunk response into timestamp-free JSON files per rank
 - `--response-files / --no-response-files` toggle per-rank response files (default enabled with directory `responses/`)
+- `--readline / --no-readline` choose between GNU Readline prompts or plain stdin when the ncurses TUI is disabled
 - `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
 - `--tasks 16` divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
 - `--auto-scale-mode chunks --auto-scale-threshold 100000000 --auto-scale-factor 4` splits giant uploads into additional logical tasks; swap `chunks` for `threads` (via the wrapper) to bump `mpirun -np` automatically once the threshold is crossed
@@ -76,6 +90,7 @@ Combine options freely; every flag is also available from a simple key/value con
 - The application requires an API key in the environment (`DEEPSEEK_API_KEY` by default).
 - `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are auto-selected when you switch providers (override with `--api-key-env` if your endpoint uses a custom variable name).
 - Rank 0 hosts the TUI; non-root ranks wait for the broadcast payload.
+- When the TUI is disabled, the client pivots to a GNU Readline prompt (unless `--no-readline`) so you still get history and multiline editing before broadcasting to MPI ranks.
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
 - Response files are enabled by default (saved under `responses/` per rank/chunk). Disable with `--no-response-files` if you only want log output.

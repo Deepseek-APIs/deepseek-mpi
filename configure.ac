@@ -27,6 +27,15 @@ PKG_PROG_PKG_CONFIG
 PKG_CHECK_MODULES([LIBCURL], [libcurl])
 PKG_CHECK_MODULES([NCURSES], [ncurses])
 
+AC_CHECK_HEADERS([readline/readline.h], [], [AC_MSG_ERROR([readline/readline.h is required])])
+AC_CHECK_HEADERS([readline/history.h], [], [AC_MSG_ERROR([readline/history.h is required])])
+AC_CHECK_LIB([readline], [readline],
+             [READLINE_LIBS="-lreadline"],
+             [AC_MSG_ERROR([GNU Readline library is required])])
+READLINE_CFLAGS=""
+AC_SUBST([READLINE_LIBS])
+AC_SUBST([READLINE_CFLAGS])
+
 have_libmagic=no
 PKG_CHECK_MODULES([LIBMAGIC], [libmagic], [have_libmagic=yes], [have_libmagic=no])
 AS_IF([test "x$have_libmagic" = "xyes"], [AC_DEFINE([HAVE_LIBMAGIC], [1], [Define if libmagic is available])])

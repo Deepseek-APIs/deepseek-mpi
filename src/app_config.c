@@ -140,6 +140,7 @@ ProgramConfig config_defaults(void) {
 
   cfg.show_progress = true;
   cfg.use_tui = true;
+  cfg.use_readline_prompt = true;
   cfg.dry_run = false;
   cfg.allow_file_prompt = true;
   cfg.use_stdin = false;
@@ -199,6 +200,7 @@ void config_free(ProgramConfig *config) {
   config->target_tasks_set = false;
   config->max_output_tokens = AI_DEFAULT_MAX_OUTPUT_TOKENS;
   config->provider = API_PROVIDER_DEEPSEEK;
+  config->use_readline_prompt = true;
   config->auto_scale_mode = AUTOSCALE_MODE_NONE;
   config->auto_scale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
   config->auto_scale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
@@ -440,6 +442,13 @@ int config_apply_kv(ProgramConfig *config, const char *key, const char *value, c
       return -1;
     }
     config->allow_file_prompt = flag;
+  } else if (strcmp(key, "use_readline") == 0 || strcmp(key, "readline") == 0) {
+    bool flag;
+    if (parse_bool_value(val, &flag) != 0) {
+      cfg_assign_error(error_out, "invalid readline flag: %s", val);
+      return -1;
+    }
+    config->use_readline_prompt = flag;
   } else if (strcmp(key, "use_stdin") == 0 || strcmp(key, "stdin") == 0) {
     bool flag;
     if (parse_bool_value(val, &flag) != 0) {

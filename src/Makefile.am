@@ -1,4 +1,4 @@
-AM_CPPFLAGS = $(LIBCURL_CFLAGS) $(NCURSES_CFLAGS) $(LIBMAGIC_CFLAGS) $(LIBXML2_CFLAGS) $(LIBARCHIVE_CFLAGS) -I$(top_srcdir)/src
+AM_CPPFLAGS = $(LIBCURL_CFLAGS) $(NCURSES_CFLAGS) $(LIBMAGIC_CFLAGS) $(LIBXML2_CFLAGS) $(LIBARCHIVE_CFLAGS) $(READLINE_CFLAGS) -I$(top_srcdir)/src
 AM_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic
 
 bin_PROGRAMS = deepseek_mpi deepseek_wrapper
@@ -13,10 +13,11 @@ deepseek_mpi_SOURCES = \
 	logger.c logger.h \
 	string_buffer.c string_buffer.h \
 	file_loader.c file_loader.h \
+	readline_prompt.c readline_prompt.h \
 	attachment_loader.c attachment_loader.h \
 	deepseek.h
 
-deepseek_mpi_LDADD = $(LIBCURL_LIBS) $(NCURSES_LIBS) $(LIBMAGIC_LIBS) $(LIBXML2_LIBS) $(LIBARCHIVE_LIBS)
+deepseek_mpi_LDADD = $(LIBCURL_LIBS) $(NCURSES_LIBS) $(LIBMAGIC_LIBS) $(LIBXML2_LIBS) $(LIBARCHIVE_LIBS) $(READLINE_LIBS)
 
 deepseek_wrapper_SOURCES = \
 	deepseek_wrapper.c \

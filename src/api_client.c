@@ -114,7 +114,7 @@ static char *json_escape(const char *text, size_t len) {
   return escaped;
 }
 
-static char *build_payload(const char *chunk, size_t chunk_len, size_t chunk_index) {
+static char *build_payload_deepseek(const char *chunk, size_t chunk_len, size_t chunk_index) {
   StringBuffer buffer;
   sb_init(&buffer);
   sb_append_printf(&buffer, "{\"chunk_index\":%zu,\"payload\":\"", chunk_index);
@@ -127,6 +127,89 @@ static char *build_payload(const char *chunk, size_t chunk_len, size_t chunk_ind
   free(escaped);
   sb_append_str(&buffer, "\"}");
   return sb_detach(&buffer);
+}
+
+static const char *resolve_model(const ProgramConfig *config, ApiProvider provider) {
+  if (config && config->model && config->model[0] != '\0') {
+    return config->model;
+  }
+  switch (provider) {
+  case API_PROVIDER_OPENAI:
+    return OPENAI_DEFAULT_MODEL;
+  case API_PROVIDER_ANTHROPIC:
+    return ANTHROPIC_DEFAULT_MODEL;
+  default:
+    return "";
+  }
+}
+
+static int resolve_max_tokens(const ProgramConfig *config) {
+  if (!config) {
+    return AI_DEFAULT_MAX_OUTPUT_TOKENS;
+  }
+  if (config->max_output_tokens > 0) {
+    return config->max_output_tokens;
+  }
+  return AI_DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+static char *build_payload_openai(const ProgramConfig *config, const char *chunk, size_t chunk_len) {
+  const char *model = resolve_model(config, API_PROVIDER_OPENAI);
+  int max_tokens = resolve_max_tokens(config);
+  StringBuffer buffer;
+  sb_init(&buffer);
+  sb_append_str(&buffer, "{\"model\":\"");
+  sb_append_str(&buffer, model);
+  sb_append_str(&buffer, "\",\"messages\":[{\"role\":\"user\",\"content\":\"");
+  char *escaped = json_escape(chunk, chunk_len);
+  if (!escaped) {
+    sb_clean(&buffer);
+    return NULL;
+  }
+  sb_append_str(&buffer, escaped);
+  free(escaped);
+  sb_append_str(&buffer, "\"}]");
+  if (max_tokens > 0) {
+    sb_append_printf(&buffer, ",\"max_tokens\":%d", max_tokens);
+  }
+  sb_append_char(&buffer, '}');
+  return sb_detach(&buffer);
+}
+
+static char *build_payload_anthropic(const ProgramConfig *config, const char *chunk, size_t chunk_len) {
+  const char *model = resolve_model(config, API_PROVIDER_ANTHROPIC);
+  int max_tokens = resolve_max_tokens(config);
+  StringBuffer buffer;
+  sb_init(&buffer);
+  sb_append_str(&buffer, "{\"model\":\"");
+  sb_append_str(&buffer, model);
+  sb_append_printf(&buffer, "\",\"max_tokens\":%d,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"",
+                   max_tokens);
+  char *escaped = json_escape(chunk, chunk_len);
+  if (!escaped) {
+    sb_clean(&buffer);
+    return NULL;
+  }
+  sb_append_str(&buffer, escaped);
+  free(escaped);
+  sb_append_str(&buffer, "\"}]}]}");
+  return sb_detach(&buffer);
+}
+
+static char *build_payload_for_provider(const ProgramConfig *config, const char *chunk, size_t chunk_len,
+                                        size_t chunk_index) {
+  if (!config) {
+    return NULL;
+  }
+  switch (config->provider) {
+  case API_PROVIDER_OPENAI:
+    return build_payload_openai(config, chunk, chunk_len);
+  case API_PROVIDER_ANTHROPIC:
+    return build_payload_anthropic(config, chunk, chunk_len);
+  case API_PROVIDER_DEEPSEEK:
+  default:
+    return build_payload_deepseek(chunk, chunk_len, chunk_index);
+  }
 }
 
 static void sleep_millis(long millis) {
@@ -171,13 +254,23 @@ int api_client_init(ApiClient *client, const ProgramConfig *config, char **error
   return 0;
 }
 
-int api_client_send(ApiClient *client, const char *chunk, size_t chunk_len, size_t chunk_index, StringBuffer *response, char **error_out) {
+int api_client_send(ApiClient *client, const char *chunk, size_t chunk_len, size_t chunk_index, StringBuffer *response,
+                    char **error_out, ApiClientError *error_type) {
+  if (error_type) {
+    *error_type = API_CLIENT_ERROR_NONE;
+  }
   if (!client || !client->config) {
     assign_error(error_out, "internal: client missing");
+    if (error_type) {
+      *error_type = API_CLIENT_ERROR_PERMANENT;
+    }
     return -1;
   }
   if (chunk_len > client->config->max_request_bytes) {
     assign_error(error_out, "chunk %zu exceeds max payload %zu", chunk_index, client->config->max_request_bytes);
+    if (error_type) {
+      *error_type = API_CLIENT_ERROR_PERMANENT;
+    }
     return -1;
   }
   if (client->config->dry_run) {
@@ -188,13 +281,28 @@ int api_client_send(ApiClient *client, const char *chunk, size_t chunk_len, size
     return 0;
   }
 
-  char *payload = build_payload(chunk, chunk_len, chunk_index);
+  char *payload = build_payload_for_provider(client->config, chunk, chunk_len, chunk_index);
   if (!payload) {
     assign_error(error_out, "unable to allocate payload");
+    if (error_type) {
+      *error_type = API_CLIENT_ERROR_PERMANENT;
+    }
     return -1;
   }
 
   int attempts = client->config->max_retries < 0 ? 0 : client->config->max_retries;
+  long base_delay = client->config->retry_delay_ms > 0 ? client->config->retry_delay_ms : 100;
+  if (base_delay <= 0) {
+    base_delay = 100;
+  }
+  long delay = base_delay;
+  long max_delay = base_delay * 8;
+  if (max_delay < base_delay) {
+    max_delay = base_delay;
+  }
+
+  ApiClientError final_error = API_CLIENT_ERROR_HTTP;
+
   for (int attempt = 0; attempt <= attempts; ++attempt) {
     if (response) {
       sb_reset(response);
@@ -203,11 +311,59 @@ int api_client_send(ApiClient *client, const char *chunk, size_t chunk_len, size
     if (!curl) {
       assign_error(error_out, "curl handle allocation failed");
       free(payload);
+      if (error_type) {
+        *error_type = API_CLIENT_ERROR_PERMANENT;
+      }
       return -1;
     }
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    if (client->api_key) {
+    headers = curl_slist_append(headers, "Accept: application/json");
+    if (client->config->provider == API_PROVIDER_ANTHROPIC) {
+      if (!client->api_key) {
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        free(payload);
+        assign_error(error_out, "Anthropic-compatible endpoints require an API key");
+        if (error_type) {
+          *error_type = API_CLIENT_ERROR_PERMANENT;
+        }
+        return -1;
+      }
+      size_t key_needed = strlen(client->api_key) + 16;
+      char *key_header = malloc(key_needed);
+      if (!key_header) {
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        free(payload);
+        assign_error(error_out, "unable to allocate x-api-key header");
+        if (error_type) {
+          *error_type = API_CLIENT_ERROR_PERMANENT;
+        }
+        return -1;
+      }
+      snprintf(key_header, key_needed, "x-api-key: %s", client->api_key);
+      headers = curl_slist_append(headers, key_header);
+      free(key_header);
+
+      const char *version =
+          client->config->anthropic_version ? client->config->anthropic_version : ANTHROPIC_DEFAULT_VERSION;
+      size_t version_len = strlen(version) + 32;
+      char *version_header = malloc(version_len);
+      if (!version_header) {
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        free(payload);
+        assign_error(error_out, "unable to allocate anthropic-version header");
+        if (error_type) {
+          *error_type = API_CLIENT_ERROR_PERMANENT;
+        }
+        return -1;
+      }
+      snprintf(version_header, version_len, "anthropic-version: %s", version);
+      headers = curl_slist_append(headers, version_header);
+      free(version_header);
+    } else if (client->api_key) {
       size_t needed = strlen(client->api_key) + 32;
       char *auth = malloc(needed);
       if (!auth) {
@@ -215,6 +371,9 @@ int api_client_send(ApiClient *client, const char *chunk, size_t chunk_len, size
         curl_easy_cleanup(curl);
         free(payload);
         assign_error(error_out, "unable to build auth header");
+        if (error_type) {
+          *error_type = API_CLIENT_ERROR_PERMANENT;
+        }
         return -1;
       }
       snprintf(auth, needed, "Authorization: Bearer %s", client->api_key);
@@ -245,13 +404,31 @@ int api_client_send(ApiClient *client, const char *chunk, size_t chunk_len, size
       return 0;
     }
 
-    if (attempt >= attempts) {
-      assign_error(error_out, "HTTP failure rc=%d status=%ld", rc, status_code);
+    bool network_error = (rc != CURLE_OK);
+    bool http_transient =
+        (rc == CURLE_OK && (status_code == 0 || status_code == 408 || status_code == 429 || status_code >= 500));
+    bool transient = network_error || http_transient;
+    final_error = transient ? API_CLIENT_ERROR_NETWORK : API_CLIENT_ERROR_HTTP;
+
+    if (attempt >= attempts || !transient) {
+      if (network_error) {
+        assign_error(error_out, "network failure rc=%d (%s)", rc, curl_easy_strerror(rc));
+      } else {
+        assign_error(error_out, "HTTP failure status=%ld", status_code);
+      }
       break;
     }
-    sleep_millis(client->config->retry_delay_ms);
+
+    sleep_millis(delay);
+    if (delay < max_delay) {
+      long next = delay * 2;
+      delay = next > max_delay ? max_delay : next;
+    }
   }
 
+  if (error_type) {
+    *error_type = final_error;
+  }
   free(payload);
   return -1;
 }

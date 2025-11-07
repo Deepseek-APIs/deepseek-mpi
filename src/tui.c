@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <ncurses.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -13,6 +14,13 @@
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
+
+static volatile sig_atomic_t tui_abort_flag = 0;
+
+static void tui_sigint_handler(int signo) {
+  (void) signo;
+  tui_abort_flag = 1;
+}
 
 static void set_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
@@ -64,9 +72,17 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
   keypad(stdscr, TRUE);
   curs_set(1);
 
+  struct sigaction old_action;
+  struct sigaction new_action;
+  sigemptyset(&new_action.sa_mask);
+  new_action.sa_flags = 0;
+  new_action.sa_handler = tui_sigint_handler;
+  sigaction(SIGINT, &new_action, &old_action);
+
   int row = 0;
   mvprintw(row++, 2, "DeepSeek MPI Client");
   mvprintw(row++, 2, "Rank 0 interactive mode");
+  mvprintw(row++, 2, "Press Ctrl+C to cancel the current line without exiting.");
   row++;
   mvprintw(row++, 2, "Enter optional file path to preload (leave empty to skip):");
   char file_path[PATH_MAX];
@@ -99,6 +115,10 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
   row++;
   mvprintw(row++, 2, "Type payload text below. Finish with a single '.' on a line.");
   mvprintw(row++, 2, "Use Backspace to edit. The buffer syncs across MPI ranks after you exit.");
+  mvprintw(row++, 2, "Ctrl+C clears the current line; '.' sends the payload to all ranks.");
+
+  int status_row = row++;
+  mvprintw(status_row, 2, "Ready.");
 
   bool collecting = true;
   while (collecting) {
@@ -111,8 +131,19 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
     char line[2048];
     memset(line, 0, sizeof line);
     echo();
-    getnstr(line, (int) sizeof(line) - 1);
+    int rc = getnstr(line, (int) sizeof(line) - 1);
     noecho();
+    if (tui_abort_flag) {
+      tui_abort_flag = 0;
+      mvprintw(status_row, 2, "Ctrl+C detected. Line cleared – continue typing or '.' to finish.");
+      clrtoeol();
+      continue;
+    }
+    if (rc == ERR) {
+      mvprintw(status_row, 2, "Input error encountered. Try again or press '.' to finish.");
+      clrtoeol();
+      continue;
+    }
     if (strcmp(line, ".") == 0) {
       collecting = false;
       break;
@@ -126,6 +157,7 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
   char *result = sb_detach(&buffer);
   sb_clean(&buffer);
   endwin();
+  sigaction(SIGINT, &old_action, NULL);
 
   if (!result || payload_len == 0) {
     free(result);
