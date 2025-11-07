@@ -1,0 +1,14 @@
+PROJECT_NAME           = "@PACKAGE_NAME@"
+PROJECT_NUMBER         = "@PACKAGE_VERSION@"
+OUTPUT_DIRECTORY       = @abs_top_builddir@/doc
+INPUT                  = @abs_top_srcdir@/src @abs_top_srcdir@/README.md
+RECURSIVE              = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+EXTRACT_STATIC         = YES
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = YES
+WARN_IF_UNDOCUMENTED   = NO
+FULL_PATH_NAMES        = NO

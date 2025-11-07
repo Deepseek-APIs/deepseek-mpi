@@ -1,0 +1,14 @@
+PROJECT_NAME           = "deepseek-mpi"
+PROJECT_NUMBER         = "0.1.0"
+OUTPUT_DIRECTORY       = /home/zenulabidin/Documents/blastedstandoff/doc
+INPUT                  = /home/zenulabidin/Documents/blastedstandoff/src /home/zenulabidin/Documents/blastedstandoff/README.md
+RECURSIVE              = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+EXTRACT_STATIC         = YES
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = YES
+WARN_IF_UNDOCUMENTED   = NO
+FULL_PATH_NAMES        = NO
