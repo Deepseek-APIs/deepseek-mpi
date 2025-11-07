@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "string_buffer.h"
+#include "attachment_loader.h"
 
 extern char **environ;
 
@@ -21,7 +22,7 @@ extern char **environ;
 #define DEFAULT_RESPONSE_DIR "responses"
 
 typedef struct {
-  char role[16];
+  char role[32];
   char *text;
 } Message;
 
@@ -41,11 +42,6 @@ typedef struct {
   size_t tasks;
   bool tasks_set;
 } WrapperConfig;
-
-typedef enum {
-  ATTACH_TEXT,
-  ATTACH_BINARY
-} AttachmentKind;
 
 static void conversation_free(Conversation *conv) {
   if (!conv) {
@@ -182,7 +178,8 @@ static void draw_status(WINDOW *status_win, const char *status) {
   }
   werase(status_win);
   box(status_win, 0, 0);
-  mvwprintw(status_win, 1, 2, "%s", status ? status : "Ready. Enter text, ENTER to send, :quit to exit.");
+  mvwprintw(status_win, 1, 2, "%s",
+            status ? status : "DeepSeek MPI chat ready. Enter prompts, press ENTER to send, :quit to exit.");
   wrefresh(status_win);
 }
 
@@ -203,7 +200,7 @@ static void draw_output(WINDOW *output_win, const StringBuffer *buffer) {
   }
   werase(output_win);
   box(output_win, 0, 0);
-  mvwprintw(output_win, 0, 2, "Last Output");
+  mvwprintw(output_win, 0, 2, "DeepSeek MPI Output");
   int row = 1;
   int max_rows = getmaxy(output_win) - 1;
   if (buffer && buffer->data) {
@@ -226,160 +223,32 @@ static void draw_output(WINDOW *output_win, const StringBuffer *buffer) {
   wrefresh(output_win);
 }
 
-static const char *guess_attachment_label(const char *path) {
-  if (!path) {
-    return "attachment";
-  }
-  const char *dot = strrchr(path, '.');
-  if (!dot || *(dot + 1) == '\0') {
-    return "attachment";
-  }
-  const char *ext = dot + 1;
-  if (strcasecmp(ext, "png") == 0 || strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0 ||
-      strcasecmp(ext, "gif") == 0 || strcasecmp(ext, "bmp") == 0 || strcasecmp(ext, "webp") == 0) {
-    return "image";
-  }
-  if (strcasecmp(ext, "pdf") == 0 || strcasecmp(ext, "doc") == 0 || strcasecmp(ext, "docx") == 0 ||
-      strcasecmp(ext, "ppt") == 0 || strcasecmp(ext, "pptx") == 0) {
-    return "document";
-  }
-  if (strcasecmp(ext, "csv") == 0 || strcasecmp(ext, "xls") == 0 || strcasecmp(ext, "xlsx") == 0 ||
-      strcasecmp(ext, "txt") == 0 || strcasecmp(ext, "md") == 0) {
-    return "text";
-  }
-  return "attachment";
-}
-
-static AttachmentKind classify_data(const unsigned char *data, size_t len) {
-  size_t binary = 0;
-  for (size_t i = 0; i < len; ++i) {
-    unsigned char ch = data[i];
-    if (ch == '\n' || ch == '\r' || ch == '\t') {
-      continue;
-    }
-    if (ch < 0x09 || (ch > 0x0D && ch < 0x20) || ch == 0x7F) {
-      binary++;
-    }
-  }
-  if (binary * 5 > len) {
-    return ATTACH_BINARY;
-  }
-  return ATTACH_TEXT;
-}
-
-static char *base64_encode(const unsigned char *data, size_t len) {
-  static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  size_t out_len = 4 * ((len + 2) / 3);
-  char *out = malloc(out_len + 1);
-  if (!out) {
-    return NULL;
-  }
-  size_t i = 0, j = 0;
-  while (i < len) {
-    uint32_t octet_a = i < len ? data[i++] : 0;
-    uint32_t octet_b = i < len ? data[i++] : 0;
-    uint32_t octet_c = i < len ? data[i++] : 0;
-    uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
-    out[j++] = table[(triple >> 18) & 0x3F];
-    out[j++] = table[(triple >> 12) & 0x3F];
-    out[j++] = (i > len + 1) ? '=' : table[(triple >> 6) & 0x3F];
-    out[j++] = (i > len) ? '=' : table[triple & 0x3F];
-  }
-  out[out_len] = '\0';
-  return out;
-}
-
-static int read_file_bytes(const char *path, unsigned char **out, size_t *len, char *errbuf, size_t errlen) {
-  if (!path || !out || !len) {
-    snprintf(errbuf, errlen, "invalid arguments");
-    return -1;
-  }
-  FILE *fp = fopen(path, "rb");
-  if (!fp) {
-    snprintf(errbuf, errlen, "unable to open %s: %s", path, strerror(errno));
-    return -1;
-  }
-  if (fseek(fp, 0, SEEK_END) != 0) {
-    snprintf(errbuf, errlen, "fseek failed for %s", path);
-    fclose(fp);
-    return -1;
-  }
-  long size = ftell(fp);
-  if (size < 0) {
-    snprintf(errbuf, errlen, "ftell failed for %s", path);
-    fclose(fp);
-    return -1;
-  }
-  rewind(fp);
-  unsigned char *buffer = malloc((size_t) size + 1);
-  if (!buffer) {
-    snprintf(errbuf, errlen, "unable to allocate %ld bytes", size);
-    fclose(fp);
-    return -1;
-  }
-  size_t read_bytes = fread(buffer, 1, (size_t) size, fp);
-  fclose(fp);
-  if (read_bytes != (size_t) size) {
-    snprintf(errbuf, errlen, "short read for %s", path);
-    free(buffer);
-    return -1;
-  }
-  buffer[read_bytes] = '\0';
-  *out = buffer;
-  *len = read_bytes;
-  return 0;
-}
-
 static int attach_file_to_conversation(Conversation *conv, const char *path, char *status_line, size_t status_len) {
-  unsigned char *bytes = NULL;
-  size_t len = 0;
-  char errbuf[128];
-  if (read_file_bytes(path, &bytes, &len, errbuf, sizeof errbuf) != 0) {
-    snprintf(status_line, status_len, "%s", errbuf);
+  AttachmentResult res;
+  char *error = NULL;
+  if (attachment_format_message(path, &res, &error) != 0) {
+    snprintf(status_line, status_len, "%s", error ? error : "Attachment failed");
+    free(error);
     return -1;
   }
-  AttachmentKind kind = classify_data(bytes, len);
-  const char *label = guess_attachment_label(path);
-  StringBuffer payload;
-  sb_init(&payload);
-  sb_append_printf(&payload, "Attachment %s (%s, %zu bytes)\n", path, label, len);
-  if (kind == ATTACH_TEXT) {
-    size_t limit = len > 16384 ? 16384 : len;
-    sb_append(&payload, (const char *) bytes, limit);
-    if (limit < len) {
-      sb_append_str(&payload, "\n... [truncated]\n");
-    }
-  } else {
-    char *encoded = base64_encode(bytes, len);
-    if (!encoded) {
-      free(bytes);
-      sb_clean(&payload);
-      snprintf(status_line, status_len, "base64 encode failed");
-      return -1;
-    }
-    sb_append_str(&payload, "Base64:\n");
-    sb_append_str(&payload, encoded);
-    sb_append_char(&payload, '\n');
-    free(encoded);
-  }
-  conversation_add(conv, "User-Attach", payload.data ? payload.data : "[attachment]");
-  sb_clean(&payload);
-  free(bytes);
-  snprintf(status_line, status_len, "Attached %s", path);
+  conversation_add(conv, "Attach@MPI", res.message_text ? res.message_text : "[attachment]");
+  snprintf(status_line, status_len, "Attached %s (%s) to DeepSeek MPI chat", path,
+           res.mime_label ? res.mime_label : "unknown");
+  attachment_result_clean(&res);
   return 0;
 }
 
 static void emit_help(Conversation *conv) {
-  conversation_add(conv, "System",
-                   "Slash commands:\n"
+  conversation_add(conv, "System-MPI",
+                   "DeepSeek MPI chat commands:\n"
                    "  /help                  Show this message\n"
                    "  /quit or /exit        Leave the wrapper\n"
                    "  /attach <path>        Attach a document or image (auto text/base64)\n"
-                   "  /np <n>               Set MPI ranks for future runs\n"
+                   "  /np <n>               Set MPI ranks for upcoming DeepSeek runs\n"
                    "  /tasks <n>            Request logical task count (auto chunking)\n"
-                   "  /chunk <bytes>        Force chunk size\n"
-                   "  /dry-run on|off       Toggle dry-run mode\n"
-                   "  /clear                Reset the conversation history");
+                   "  /chunk <bytes>        Force chunk size for DeepSeek payload slices\n"
+                   "  /dry-run on|off       Toggle DeepSeek MPI dry-run mode\n"
+                   "  /clear                Reset the DeepSeek chat history");
 }
 
 static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *conv, char *status_line,
@@ -402,10 +271,10 @@ static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *c
   }
   if (strcasecmp(cmd, "help") == 0) {
     emit_help(conv);
-    snprintf(status_line, status_len, "Displayed help");
+    snprintf(status_line, status_len, "Displayed DeepSeek MPI help");
   } else if (strcasecmp(cmd, "quit") == 0 || strcasecmp(cmd, "exit") == 0) {
     *should_quit = true;
-    snprintf(status_line, status_len, "Exiting wrapper...");
+    snprintf(status_line, status_len, "Exiting DeepSeek MPI wrapper...");
   } else if (strcasecmp(cmd, "np") == 0) {
     if (!args || !*args) {
       snprintf(status_line, status_len, "Usage: /np <value>");
@@ -415,7 +284,7 @@ static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *c
         snprintf(status_line, status_len, "Invalid np: %s", args);
       } else {
         cfg->np = value;
-        snprintf(status_line, status_len, "MPI ranks set to %d", cfg->np);
+        snprintf(status_line, status_len, "MPI ranks set to %d for DeepSeek chat", cfg->np);
       }
     }
   } else if (strcasecmp(cmd, "tasks") == 0) {
@@ -428,7 +297,7 @@ static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *c
       } else {
         cfg->tasks = (size_t) value;
         cfg->tasks_set = true;
-        snprintf(status_line, status_len, "Tasks set to %zu", cfg->tasks);
+        snprintf(status_line, status_len, "Tasks set to %zu for DeepSeek MPI chunking", cfg->tasks);
       }
     }
   } else if (strcasecmp(cmd, "chunk") == 0) {
@@ -441,19 +310,19 @@ static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *c
       } else {
         cfg->chunk_size = (size_t) value;
         cfg->chunk_size_set = true;
-        snprintf(status_line, status_len, "Chunk size set to %zu bytes", cfg->chunk_size);
+        snprintf(status_line, status_len, "Chunk size set to %zu bytes for DeepSeek MPI", cfg->chunk_size);
       }
     }
   } else if (strcasecmp(cmd, "dry-run") == 0) {
     if (!args || !*args) {
       cfg->dry_run = !cfg->dry_run;
-      snprintf(status_line, status_len, "Dry-run toggled %s", cfg->dry_run ? "on" : "off");
+      snprintf(status_line, status_len, "DeepSeek MPI dry-run toggled %s", cfg->dry_run ? "on" : "off");
     } else if (strcasecmp(args, "on") == 0) {
       cfg->dry_run = true;
-      snprintf(status_line, status_len, "Dry-run enabled");
+      snprintf(status_line, status_len, "DeepSeek MPI dry-run enabled");
     } else if (strcasecmp(args, "off") == 0) {
       cfg->dry_run = false;
-      snprintf(status_line, status_len, "Dry-run disabled");
+      snprintf(status_line, status_len, "DeepSeek MPI dry-run disabled");
     } else {
       snprintf(status_line, status_len, "Usage: /dry-run [on|off]");
     }
@@ -465,10 +334,10 @@ static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *c
     }
   } else if (strcasecmp(cmd, "clear") == 0) {
     conversation_clear(conv);
-    conversation_add(conv, "System", "Conversation cleared. Start a new session.");
-    snprintf(status_line, status_len, "Conversation cleared");
+    conversation_add(conv, "System-MPI", "DeepSeek MPI conversation cleared. Start a new session.");
+    snprintf(status_line, status_len, "DeepSeek MPI conversation cleared");
   } else {
-    snprintf(status_line, status_len, "Unknown command: /%s", cmd);
+    snprintf(status_line, status_len, "Unknown DeepSeek MPI command: /%s", cmd);
   }
   free(dup);
   return true;
@@ -633,14 +502,15 @@ static int run_inference(const WrapperConfig *cfg, Conversation *conv, StringBuf
       sb_append_str(last_output, "\n... [truncated]\n");
     }
   }
-  conversation_add(conv, "DeepSeek", response.data);
+  conversation_add(conv, "DeepSeek-MPI", response.data);
   sb_clean(&response);
-  snprintf(status_buf, status_len, "DeepSeek run completed.");
+  snprintf(status_buf, status_len, "DeepSeek MPI run completed.");
   return 0;
 }
 
 static void usage(const char *prog) {
   fprintf(stderr,
+          "DeepSeek MPI Chat Wrapper\n"
           "Usage: %s [options]\n\n"
           "Options:\n"
           "  --np N                Number of MPI ranks (default 2)\n"
@@ -740,10 +610,10 @@ int main(int argc, char **argv) {
   build_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
 
   Conversation conv = {0};
-  conversation_add(&conv, "System",
-                   "Welcome to the DeepSeek wrapper. Type prompts to run inference or use /help for meta-commands.");
+  conversation_add(&conv, "System-MPI",
+                   "Welcome to the DeepSeek MPI chat wrapper. Talk to DeepSeek like the hosted chat UI, but backed by MPI ranks. Use /help for commands.");
 
-  char status_line[256] = "Ready.";
+  char status_line[256] = "DeepSeek MPI chat ready.";
   StringBuffer current_input;
   sb_init(&current_input);
   StringBuffer last_output;
@@ -754,7 +624,7 @@ int main(int argc, char **argv) {
     draw_conversation(conversation_outer, conversation_inner, &conv);
     draw_output(output_win, &last_output);
     draw_status(status_win, status_line);
-    draw_input(input_win, "You>", current_input.data ? current_input.data : "");
+    draw_input(input_win, "DeepSeek MPI>", current_input.data ? current_input.data : "");
 
     int ch = wgetch(input_win);
     if (ch == ERR) {
@@ -778,11 +648,11 @@ int main(int argc, char **argv) {
       if (strcmp(line, ":quit") == 0) {
         running = false;
       } else if (strlen(line) == 0) {
-        snprintf(status_line, sizeof status_line, "Please enter a prompt or /help.");
+        snprintf(status_line, sizeof status_line, "Please enter a DeepSeek prompt or /help.");
       } else {
-        conversation_add(&conv, "User", line);
+        conversation_add(&conv, "You@DeepSeekMPI", line);
         sb_reset(&current_input);
-        snprintf(status_line, sizeof status_line, "Running DeepSeek...");
+        snprintf(status_line, sizeof status_line, "Running DeepSeek MPI chat inference...");
         draw_status(status_win, status_line);
         wrefresh(status_win);
         run_inference(&cfg, &conv, &last_output, status_line, sizeof status_line);

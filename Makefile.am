@@ -1,5 +1,5 @@
 ACLOCAL_AMFLAGS = -I m4
-SUBDIRS = src doc
+SUBDIRS = src tests doc
 
 EXTRA_DIST = README.md autogen.sh
 

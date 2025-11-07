@@ -27,6 +27,18 @@ PKG_PROG_PKG_CONFIG
 PKG_CHECK_MODULES([LIBCURL], [libcurl])
 PKG_CHECK_MODULES([NCURSES], [ncurses])
 
+have_libmagic=no
+PKG_CHECK_MODULES([LIBMAGIC], [libmagic], [have_libmagic=yes], [have_libmagic=no])
+AS_IF([test "x$have_libmagic" = "xyes"], [AC_DEFINE([HAVE_LIBMAGIC], [1], [Define if libmagic is available])])
+
+have_libxml2=no
+PKG_CHECK_MODULES([LIBXML2], [libxml-2.0], [have_libxml2=yes], [have_libxml2=no])
+AS_IF([test "x$have_libxml2" = "xyes"], [AC_DEFINE([HAVE_LIBXML2], [1], [Define if libxml2 is available])])
+
+have_libarchive=no
+PKG_CHECK_MODULES([LIBARCHIVE], [libarchive], [have_libarchive=yes], [have_libarchive=no])
+AS_IF([test "x$have_libarchive" = "xyes"], [AC_DEFINE([HAVE_LIBARCHIVE], [1], [Define if libarchive is available])])
+
 AC_ARG_WITH([doxygen], AS_HELP_STRING([--with-doxygen=PATH], [Path to doxygen binary]),
   [DOXYGEN="$withval"],
   [AC_PATH_PROG([DOXYGEN], [doxygen], [no])])
@@ -41,6 +53,7 @@ AC_SUBST([DOXYGEN])
 AC_CONFIG_FILES([
   Makefile
   src/Makefile
+  tests/Makefile
   doc/Makefile
   doc/Doxyfile
 ])
