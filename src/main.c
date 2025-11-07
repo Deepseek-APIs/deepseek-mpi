@@ -283,6 +283,26 @@ static void persist_response_to_disk(const ProgramConfig *config, Logger *logger
   free(path);
 }
 
+static void log_response_preview(const ProgramConfig *config, Logger *logger, size_t chunk_index,
+                                 const StringBuffer *response) {
+  (void) config;
+  if (!logger || !response || response->length == 0) {
+    return;
+  }
+  const size_t preview_limit = 4096;
+  size_t slice = response->length > preview_limit ? preview_limit : response->length;
+  logger_log(logger, LOG_LEVEL_INFO,
+             "Chunk %zu response (%zu bytes)%s:\n%.*s",
+             chunk_index,
+             response->length,
+             response->length > preview_limit ? " [preview]" : "",
+             (int) slice,
+             response->data ? response->data : "");
+  if (response->length > preview_limit) {
+    logger_log(logger, LOG_LEVEL_INFO, "... [truncated, see --response-dir for full payload]");
+  }
+}
+
 static void process_chunks(const ProgramConfig *config, Logger *logger, const Payload *payload) {
   if (!config || !payload) {
     return;
@@ -330,9 +350,7 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
         logger_log(logger, LOG_LEVEL_INFO, "Chunk %zu (%zu bytes) succeeded", chunk_index, chunk_len);
         if (response_ready) {
           persist_response_to_disk(config, logger, chunk_index, &response);
-          if (response.length > 0 && config->verbosity >= 2) {
-            logger_log(logger, LOG_LEVEL_DEBUG, "Response: %s", response.data);
-          }
+          log_response_preview(config, logger, chunk_index, &response);
         }
         chunk_done = true;
         free(error);
