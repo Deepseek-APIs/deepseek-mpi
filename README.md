@@ -10,7 +10,7 @@ Distributed TUI client for the DeepSeek Platform API. The utility slices very la
 - **Logging** – mirrored console + file logging with rank annotations for easy traceability.
 - **Doxygen docs** – `make doc` renders browsable API docs in `doc/html`.
 - **Response archival** – optional `--response-dir` switch persists every chunk response as JSON for audit trails.
-- **Codex-style wrapper** – launch `codex_wrapper` for a conversational ncurses experience that automatically spawns MPI jobs.
+- **Deepseek wrapper** – launch `deepseek_wrapper` for a conversational ncurses experience (Codex-like) that automatically spawns MPI jobs.
 
 ## Requirements
 - GCC or Clang (CentOS 7 ships GCC 4.8+)
@@ -60,7 +60,7 @@ open doc/html/index.html
 - `--max-request-bytes 12288` guardrail for payload growth
 - `--dry-run` skips HTTP calls but keeps MPI plumbing and logging
 - `--response-dir responses/` streams each chunk response into timestamp-free JSON files per rank
-- `codex_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
+- `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
 
 Combine options freely; every flag is also available from a simple key/value config file via `--config my.conf` with entries such as `chunk_size=2048` or `api_endpoint=https://api.deepseek.com/...`.
 
@@ -69,9 +69,9 @@ Combine options freely; every flag is also available from a simple key/value con
 - Rank 0 hosts the TUI; non-root ranks wait for the broadcast payload.
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
-- Use the `codex_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
+- Use the `deepseek_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
 - Use git for change tracking – a clean history keeps regressions easy to spot.
-- When you need a guided UX, run `./src/codex_wrapper --np 4 --binary ./src/deepseek_mpi`. Every time you hit Enter the wrapper gathers the ongoing conversation, writes a payload file, and invokes `mpirun` with the requested rank count. Type `:quit` or press `Esc` to exit.
+- When you need a guided UX, run `./src/deepseek_wrapper --np 4 --binary ./src/deepseek_mpi`. Every time you hit Enter the wrapper gathers the ongoing conversation, writes a payload file, and invokes `mpirun` with the requested rank count. Type `:quit` or press `Esc` to exit.
 
 ## License
 SPDX-License-Identifier: MIT

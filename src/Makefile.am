@@ -1,7 +1,7 @@
 AM_CPPFLAGS = $(LIBCURL_CFLAGS) $(NCURSES_CFLAGS) -I$(top_srcdir)/src
 AM_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic
 
-bin_PROGRAMS = deepseek_mpi codex_wrapper
+bin_PROGRAMS = deepseek_mpi deepseek_wrapper
 
 deepseek_mpi_SOURCES = \
 	main.c \
@@ -17,10 +17,10 @@ deepseek_mpi_SOURCES = \
 
 deepseek_mpi_LDADD = $(LIBCURL_LIBS) $(NCURSES_LIBS)
 
-codex_wrapper_SOURCES = \
-	codex_wrapper.c \
+deepseek_wrapper_SOURCES = \
+	deepseek_wrapper.c \
 	string_buffer.c string_buffer.h
 
-codex_wrapper_LDADD = $(NCURSES_LIBS)
+deepseek_wrapper_LDADD = $(NCURSES_LIBS)
 
 EXTRA_DIST = deepseek.h

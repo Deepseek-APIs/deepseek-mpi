@@ -229,7 +229,7 @@ static int run_inference(const WrapperConfig *cfg, Conversation *conv, char *sta
     snprintf(status_buf, status_len, "internal error: missing cfg");
     return -1;
   }
-  char payload_path[] = "/tmp/codex_payloadXXXXXX";
+  char payload_path[] = "/tmp/deepseek_payloadXXXXXX";
   if (write_payload_file(conv, payload_path) != 0) {
     snprintf(status_buf, status_len, "unable to create payload file");
     return -1;
@@ -351,7 +351,7 @@ int main(int argc, char **argv) {
   WINDOW *input_win = newwin(3, COLS, height + 3, 0);
 
   Conversation conv = {0};
-  conversation_add(&conv, "System", "Welcome to the DeepSeek Codex wrapper. Describe your intent and press Enter.");
+  conversation_add(&conv, "System", "Welcome to the DeepSeek wrapper. Describe your intent and press Enter.");
 
   char status_line[256] = "Ready.";
   StringBuffer current_input;
