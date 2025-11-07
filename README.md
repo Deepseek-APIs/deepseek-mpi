@@ -2,6 +2,8 @@
 
 Distributed TUI client for the DeepSeek Platform API. The utility slices very large text inputs, pushes the chunks to DeepSeek in parallel with MPI ranks, and mirrors results to both the console and a rotating log file. CentOS 7 users can rely on Autotools for predictable builds, while Doxygen keeps the codebase documented. The canonical home is the [`Deepseek-APIs/deepseek-mpi`](https://github.com/Deepseek-APIs/deepseek-mpi) repository, which packages the TUI, CLI, MPI glue, docs, and tests together.
 
+**Live documentation:** https://deepseek-apis.gitbook.io/deepseek-mpi
+
 ## Features
 - **MPI-driven parallelism** – each rank owns a disjoint set of chunks so API traffic scales horizontally.
 - **Ncurses TUI** – interactive session for pasting text or attaching a file by path; can be disabled for batched usage.
