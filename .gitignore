@@ -28,3 +28,5 @@ deepseek_mpi.log
 deepseek_wrapper
 deepseek_wrapper.exe
 tags
+test-driver
+/tests/

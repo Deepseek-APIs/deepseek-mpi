@@ -59,13 +59,16 @@ open doc/html/index.html
 - `--inline-text "quick payload"` bypasses TUI
 - `--no-tui` forces batch flow
 - `--max-retries 5 --retry-delay-ms 750`
+- `--network-retries 2` lets each MPI rank tear down and rebuild its HTTP client after transient network failures before giving up on a chunk
 - `--timeout 45` (seconds)
 - `--max-request-bytes 12288` guardrail for payload growth
 - `--max-output-tokens 1024` clamps completion tokens when using OpenAI/Anthropic providers
 - `--dry-run` skips HTTP calls but keeps MPI plumbing and logging
 - `--response-dir responses/` streams each chunk response into timestamp-free JSON files per rank
+- `--response-files / --no-response-files` toggle per-rank response files (default enabled with directory `responses/`)
 - `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
 - `--tasks 16` divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
+- `--auto-scale-mode chunks --auto-scale-threshold 100000000 --auto-scale-factor 4` splits giant uploads into additional logical tasks; swap `chunks` for `threads` (via the wrapper) to bump `mpirun -np` automatically once the threshold is crossed
 
 Combine options freely; every flag is also available from a simple key/value config file via `--config my.conf` with entries such as `chunk_size=2048` or `api_endpoint=https://api.deepseek.com/...`.
 
@@ -75,7 +78,10 @@ Combine options freely; every flag is also available from a simple key/value con
 - Rank 0 hosts the TUI; non-root ranks wait for the broadcast payload.
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
+- Response files are enabled by default (saved under `responses/` per rank/chunk). Disable with `--no-response-files` if you only want log output.
 - `--tasks` ensures the entire file (including large spreadsheets) is read once and then auto-sliced, so you’re never limited by the number of hardware threads on the box.
+- Autoscaling keeps big drops moving: chunk mode divides payloads across existing ranks, while wrapper `--auto-scale-mode threads` multiplies the MPI rank count on the fly when a prompt crosses your size threshold.
+- Inside the ncurses TUI, use `:set key=value`, `:show-config`, or `:config-help` to tweak runtime settings (endpoints, chunk sizes, providers, etc.) before launching the MPI job.
 - Use the `deepseek_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
 - Use git for change tracking – a clean history keeps regressions easy to spot.
 - When you need a guided UX, run `./src/deepseek_wrapper --np 4 --binary ./src/deepseek_mpi`. Every time you hit Enter the wrapper gathers the ongoing conversation, writes a payload file, and invokes `mpirun` with the requested rank count. Type `:quit` or press `Esc` to exit.

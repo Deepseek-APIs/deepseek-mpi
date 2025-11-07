@@ -28,6 +28,7 @@ typedef struct {
 } Payload;
 
 static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *payload, Logger *logger);
+static void maybe_autoscale_payload(ProgramConfig *config, const Payload *payload, Logger *logger);
 
 static void assign_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
@@ -120,6 +121,7 @@ static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *p
   }
 
   logger_log(logger, LOG_LEVEL_INFO, "Captured %zu bytes of payload", payload->length);
+  maybe_autoscale_payload(config, payload, logger);
   maybe_adjust_chunk_from_tasks(config, payload, logger);
   return 0;
 }
@@ -165,6 +167,41 @@ static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *
              tasks, chunk);
 }
 
+static void maybe_autoscale_payload(ProgramConfig *config, const Payload *payload, Logger *logger) {
+  if (!config || !payload || !logger) {
+    return;
+  }
+  if (config->auto_scale_mode == AUTOSCALE_MODE_NONE) {
+    return;
+  }
+  if (config->auto_scale_threshold_bytes == 0 || config->auto_scale_factor <= 0) {
+    return;
+  }
+  if (payload->length < config->auto_scale_threshold_bytes) {
+    return;
+  }
+  if (config->auto_scale_mode == AUTOSCALE_MODE_CHUNKS) {
+    size_t base = config->target_tasks_set && config->target_tasks > 0 ? config->target_tasks : (size_t) config->world_size;
+    if (base == 0) {
+      base = 1;
+    }
+    size_t scaled = base * (size_t) config->auto_scale_factor;
+    if (scaled == 0) {
+      scaled = base;
+    }
+    config->target_tasks = scaled;
+    config->target_tasks_set = true;
+    logger_log(logger, LOG_LEVEL_INFO,
+               "Autoscale (chunks) triggered: payload %zu bytes >= %zu bytes -> %zu tasks (factor %d)",
+               payload->length, config->auto_scale_threshold_bytes, scaled, config->auto_scale_factor);
+  } else if (config->auto_scale_mode == AUTOSCALE_MODE_THREADS) {
+    logger_log(logger, LOG_LEVEL_INFO,
+               "Autoscale (threads) requested for %zu-byte payload but MPI world size is fixed at %d. "
+               "Rerun with a higher -np or enable wrapper autoscale for rank scaling.",
+               payload->length, config->world_size);
+  }
+}
+
 static int ensure_directory(const char *path) {
   if (!path || *path == '\0') {
     errno = EINVAL;
@@ -205,7 +242,8 @@ static int ensure_directory(const char *path) {
 
 static void persist_response_to_disk(const ProgramConfig *config, Logger *logger, size_t chunk_index,
                                      const StringBuffer *response) {
-  if (!config || !logger || !config->response_dir || !response || response->length == 0) {
+  if (!config || !logger || !config->response_files_enabled || !config->response_dir || !response ||
+      response->length == 0) {
     return;
   }
   if (ensure_directory(config->response_dir) != 0) {
@@ -257,32 +295,84 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
   }
 
   StringBuffer response;
+  bool response_ready = false;
   if (client_ready) {
     sb_init(&response);
+    response_ready = true;
   }
 
   size_t processed = 0;
   size_t failures = 0;
+  size_t network_failures = 0;
   size_t chunk_index = 0;
   size_t start = 0;
   size_t end = 0;
+  bool aborted = false;
 
-  while (client_ready && chunk_cursor_next(&cursor, &start, &end, &chunk_index)) {
+  while (client_ready && !aborted && chunk_cursor_next(&cursor, &start, &end, &chunk_index)) {
     const char *chunk_ptr = payload->data + start;
     size_t chunk_len = end - start;
-    char *error = NULL;
-    int api_rc = api_client_send(&client, chunk_ptr, chunk_len, chunk_index, &response, &error);
-    if (api_rc == 0) {
-      logger_log(logger, LOG_LEVEL_INFO, "Chunk %zu (%zu bytes) succeeded", chunk_index, chunk_len);
-      persist_response_to_disk(config, logger, chunk_index, &response);
-      if (response.length > 0 && config->verbosity >= 2) {
-        logger_log(logger, LOG_LEVEL_DEBUG, "Response: %s", response.data);
-      }
-    } else {
-      logger_log(logger, LOG_LEVEL_ERROR, "Chunk %zu failed: %s", chunk_index, error ? error : "unknown error");
-      failures++;
+    int remaining_resets = config->network_retry_limit;
+    if (remaining_resets < 0) {
+      remaining_resets = 0;
     }
-    free(error);
+    bool chunk_done = false;
+    while (client_ready && !chunk_done) {
+      char *error = NULL;
+      ApiClientError api_error = API_CLIENT_ERROR_NONE;
+      int api_rc = api_client_send(&client, chunk_ptr, chunk_len, chunk_index, response_ready ? &response : NULL,
+                                   &error, &api_error);
+      if (api_rc == 0) {
+        logger_log(logger, LOG_LEVEL_INFO, "Chunk %zu (%zu bytes) succeeded", chunk_index, chunk_len);
+        if (response_ready) {
+          persist_response_to_disk(config, logger, chunk_index, &response);
+          if (response.length > 0 && config->verbosity >= 2) {
+            logger_log(logger, LOG_LEVEL_DEBUG, "Response: %s", response.data);
+          }
+        }
+        chunk_done = true;
+        free(error);
+        error = NULL;
+      } else if (api_error == API_CLIENT_ERROR_NETWORK && remaining_resets > 0) {
+        logger_log(logger, LOG_LEVEL_WARN,
+                   "Chunk %zu network error: %s (resetting client, %d retries left)", chunk_index,
+                   error ? error : "unknown error", remaining_resets);
+        free(error);
+        error = NULL;
+        remaining_resets--;
+        api_client_cleanup(&client);
+        client_ready = false;
+        char *reset_error = NULL;
+        if (api_client_init(&client, config, &reset_error) != 0) {
+          logger_log(logger, LOG_LEVEL_ERROR, "Unable to reinitialize API client: %s",
+                     reset_error ? reset_error : "unknown error");
+          free(reset_error);
+          aborted = true;
+          break;
+        }
+        client_ready = true;
+        continue;
+      } else {
+        logger_log(logger, LOG_LEVEL_ERROR, "Chunk %zu failed: %s", chunk_index,
+                   error ? error : "unknown error");
+        if (api_error == API_CLIENT_ERROR_NETWORK) {
+          network_failures++;
+        }
+        failures++;
+        chunk_done = true;
+        free(error);
+        error = NULL;
+      }
+
+      if (!client_ready || aborted) {
+        break;
+      }
+    }
+
+    if (!client_ready || aborted) {
+      break;
+    }
+
     processed++;
     if (config->show_progress && config->progress_interval > 0 &&
         (processed % (size_t) config->progress_interval == 0)) {
@@ -290,18 +380,20 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
     }
   }
 
-  unsigned long long stats[2] = {processed, failures};
-  unsigned long long global_stats[2] = {0, 0};
-  MPI_Reduce(stats, global_stats, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+  unsigned long long stats[3] = {processed, failures, network_failures};
+  unsigned long long global_stats[3] = {0, 0, 0};
+  MPI_Reduce(stats, global_stats, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
 
   if (config->rank == 0) {
     logger_log(logger, LOG_LEVEL_INFO,
-               "Cluster summary: processed=%llu, failures=%llu",
-               global_stats[0], global_stats[1]);
+               "Cluster summary: processed=%llu, failures=%llu, network_failures=%llu",
+               global_stats[0], global_stats[1], global_stats[2]);
   }
 
-  if (client_ready) {
+  if (response_ready) {
     sb_clean(&response);
+  }
+  if (client_ready) {
     api_client_cleanup(&client);
   }
 }

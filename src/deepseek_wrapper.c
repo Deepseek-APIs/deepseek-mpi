@@ -2,6 +2,7 @@
 #include <curses.h>
 #include <errno.h>
 #include <getopt.h>
+#include <limits.h>
 #include <spawn.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -13,6 +14,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "deepseek.h"
 #include "string_buffer.h"
 #include "attachment_loader.h"
 
@@ -32,6 +34,12 @@ typedef struct {
   size_t capacity;
 } Conversation;
 
+typedef enum {
+  WRAPPER_AUTOSCALE_NONE = 0,
+  WRAPPER_AUTOSCALE_THREADS,
+  WRAPPER_AUTOSCALE_CHUNKS
+} WrapperAutoscaleMode;
+
 typedef struct {
   int np;
   char *binary_path;
@@ -41,7 +49,27 @@ typedef struct {
   bool dry_run;
   size_t tasks;
   bool tasks_set;
+  WrapperAutoscaleMode autoscale_mode;
+  size_t autoscale_threshold_bytes;
+  int autoscale_factor;
+  int autoscale_max_np;
 } WrapperConfig;
+
+static int parse_autoscale_mode_arg(const char *text, WrapperAutoscaleMode *out) {
+  if (!text || !out) {
+    return -1;
+  }
+  if (strcasecmp(text, "none") == 0 || strcasecmp(text, "off") == 0) {
+    *out = WRAPPER_AUTOSCALE_NONE;
+  } else if (strcasecmp(text, "threads") == 0 || strcasecmp(text, "ranks") == 0) {
+    *out = WRAPPER_AUTOSCALE_THREADS;
+  } else if (strcasecmp(text, "chunks") == 0 || strcasecmp(text, "split") == 0 || strcasecmp(text, "tasks") == 0) {
+    *out = WRAPPER_AUTOSCALE_CHUNKS;
+  } else {
+    return -1;
+  }
+  return 0;
+}
 
 static void conversation_free(Conversation *conv) {
   if (!conv) {
@@ -383,6 +411,62 @@ static int write_payload_file(const Conversation *conv, char *template_path) {
   return 0;
 }
 
+static bool maybe_autoscale_wrapper(WrapperConfig *cfg, Conversation *conv, size_t payload_bytes,
+                                    char *status_buf, size_t status_len) {
+  if (!cfg || cfg->autoscale_mode == WRAPPER_AUTOSCALE_NONE) {
+    return false;
+  }
+  if (cfg->autoscale_threshold_bytes == 0 || cfg->autoscale_factor <= 1) {
+    return false;
+  }
+  if (payload_bytes < cfg->autoscale_threshold_bytes) {
+    return false;
+  }
+  char note[256];
+  note[0] = '\0';
+  if (cfg->autoscale_mode == WRAPPER_AUTOSCALE_THREADS) {
+    long long scaled = (long long) cfg->np * (long long) cfg->autoscale_factor;
+    if (cfg->autoscale_max_np > 0 && scaled > cfg->autoscale_max_np) {
+      scaled = cfg->autoscale_max_np;
+    }
+    if (scaled > INT_MAX) {
+      scaled = INT_MAX;
+    }
+    if (scaled <= cfg->np) {
+      return false;
+    }
+    int previous = cfg->np;
+    cfg->np = (int) scaled;
+    snprintf(note, sizeof note,
+             "Autoscale (threads): %zu bytes >= %zu bytes, MPI ranks %d -> %d",
+             payload_bytes, cfg->autoscale_threshold_bytes, previous, cfg->np);
+  } else if (cfg->autoscale_mode == WRAPPER_AUTOSCALE_CHUNKS) {
+    size_t base = cfg->tasks_set && cfg->tasks > 0 ? cfg->tasks : (size_t) cfg->np;
+    size_t scaled = base * (size_t) cfg->autoscale_factor;
+    if (scaled <= base) {
+      scaled = base;
+    }
+    if (scaled == base) {
+      return false;
+    }
+    cfg->tasks = scaled;
+    cfg->tasks_set = true;
+    snprintf(note, sizeof note,
+             "Autoscale (chunks): %zu bytes >= %zu bytes, tasks %zu -> %zu",
+             payload_bytes, cfg->autoscale_threshold_bytes, base, scaled);
+  } else {
+    return false;
+  }
+
+  if (conv) {
+    conversation_add(conv, "System-MPI", note);
+  }
+  if (status_buf && status_len > 0) {
+    snprintf(status_buf, status_len, "%s", note);
+  }
+  return true;
+}
+
 static int spawn_and_capture(char *const argv[], StringBuffer *output, char *errbuf, size_t errlen) {
   int pipefd[2];
   if (pipe(pipefd) != 0) {
@@ -461,7 +545,7 @@ static int build_command(const WrapperConfig *cfg, const char *payload_path, cha
   return 0;
 }
 
-static int run_inference(const WrapperConfig *cfg, Conversation *conv, StringBuffer *last_output, char *status_buf,
+static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *last_output, char *status_buf,
                          size_t status_len) {
   if (!cfg || !conv) {
     snprintf(status_buf, status_len, "internal error: missing cfg");
@@ -473,10 +557,24 @@ static int run_inference(const WrapperConfig *cfg, Conversation *conv, StringBuf
     return -1;
   }
 
+  size_t payload_bytes = 0;
+  struct stat st;
+  if (stat(payload_path, &st) == 0 && st.st_size > 0) {
+    payload_bytes = (size_t) st.st_size;
+  }
+
+  int saved_np = cfg->np;
+  size_t saved_tasks = cfg->tasks;
+  bool saved_tasks_set = cfg->tasks_set;
+  maybe_autoscale_wrapper(cfg, conv, payload_bytes, status_buf, status_len);
+
   char *argv[32];
   if (build_command(cfg, payload_path, argv, sizeof argv / sizeof(argv[0])) != 0) {
     snprintf(status_buf, status_len, "failed to prepare mpi command");
     unlink(payload_path);
+    cfg->np = saved_np;
+    cfg->tasks = saved_tasks;
+    cfg->tasks_set = saved_tasks_set;
     return -1;
   }
 
@@ -489,6 +587,9 @@ static int run_inference(const WrapperConfig *cfg, Conversation *conv, StringBuf
   if (rc != 0) {
     snprintf(status_buf, status_len, "%s", errbuf);
     sb_clean(&response);
+    cfg->np = saved_np;
+    cfg->tasks = saved_tasks;
+    cfg->tasks_set = saved_tasks_set;
     return -1;
   }
   if (response.length == 0) {
@@ -505,6 +606,9 @@ static int run_inference(const WrapperConfig *cfg, Conversation *conv, StringBuf
   conversation_add(conv, "DeepSeek-MPI", response.data);
   sb_clean(&response);
   snprintf(status_buf, status_len, "DeepSeek MPI run completed.");
+  cfg->np = saved_np;
+  cfg->tasks = saved_tasks;
+  cfg->tasks_set = saved_tasks_set;
   return 0;
 }
 
@@ -519,6 +623,10 @@ static void usage(const char *prog) {
           "  --chunk-size BYTES    Override chunk size\n"
           "  --tasks N             Default logical task count (auto chunking)\n"
           "  --dry-run             Pass --dry-run to deepseek_mpi\n"
+          "  --auto-scale-mode MODE       Autoscale behaviour: none, threads, chunks\n"
+          "  --auto-scale-threshold BYTES Trigger autoscale once payload exceeds this size\n"
+          "  --auto-scale-factor N        Multiplier used when autoscale fires\n"
+          "  --auto-scale-max-np N        Upper bound for autoscaled MPI ranks\n"
           "  --help                Show this message\n"
           "Slash commands inside the UI: /help, /attach <file>, /np <n>, /tasks <n>, /chunk <bytes>, /dry-run on|off, /clear, /quit\n",
           prog, DEFAULT_BINARY, DEFAULT_RESPONSE_DIR);
@@ -533,11 +641,22 @@ static void wrapper_defaults(WrapperConfig *cfg) {
   cfg->dry_run = false;
   cfg->tasks = 0;
   cfg->tasks_set = false;
+  cfg->autoscale_mode = WRAPPER_AUTOSCALE_NONE;
+  cfg->autoscale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
+  cfg->autoscale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
+  cfg->autoscale_max_np = 64;
 }
 
 int main(int argc, char **argv) {
   WrapperConfig cfg;
   wrapper_defaults(&cfg);
+
+  enum {
+    WRAP_OPT_AUTOSCALE_MODE = 2000,
+    WRAP_OPT_AUTOSCALE_THRESHOLD,
+    WRAP_OPT_AUTOSCALE_FACTOR,
+    WRAP_OPT_AUTOSCALE_MAX_NP
+  };
 
   static struct option long_opts[] = {{"np", required_argument, NULL, 'n'},
                                       {"binary", required_argument, NULL, 'b'},
@@ -545,6 +664,10 @@ int main(int argc, char **argv) {
                                       {"chunk-size", required_argument, NULL, 'c'},
                                       {"tasks", required_argument, NULL, 'w'},
                                       {"dry-run", no_argument, NULL, 'd'},
+                                      {"auto-scale-mode", required_argument, NULL, WRAP_OPT_AUTOSCALE_MODE},
+                                      {"auto-scale-threshold", required_argument, NULL, WRAP_OPT_AUTOSCALE_THRESHOLD},
+                                      {"auto-scale-factor", required_argument, NULL, WRAP_OPT_AUTOSCALE_FACTOR},
+                                      {"auto-scale-max-np", required_argument, NULL, WRAP_OPT_AUTOSCALE_MAX_NP},
                                       {"help", no_argument, NULL, 'h'},
                                       {0, 0, 0, 0}};
 
@@ -581,6 +704,48 @@ int main(int argc, char **argv) {
     case 'd':
       cfg.dry_run = true;
       break;
+    case WRAP_OPT_AUTOSCALE_MODE: {
+      WrapperAutoscaleMode mode;
+      if (parse_autoscale_mode_arg(optarg, &mode) != 0) {
+        fprintf(stderr, "Invalid auto-scale mode: %s\n", optarg);
+        return EXIT_FAILURE;
+      }
+      cfg.autoscale_mode = mode;
+      break;
+    }
+    case WRAP_OPT_AUTOSCALE_THRESHOLD: {
+      errno = 0;
+      char *end = NULL;
+      unsigned long long value = strtoull(optarg, &end, 10);
+      if (errno != 0 || !end || *end != '\0') {
+        fprintf(stderr, "Invalid auto-scale threshold: %s\n", optarg);
+        return EXIT_FAILURE;
+      }
+      cfg.autoscale_threshold_bytes = (size_t) value;
+      break;
+    }
+    case WRAP_OPT_AUTOSCALE_FACTOR: {
+      errno = 0;
+      char *end = NULL;
+      long value = strtol(optarg, &end, 10);
+      if (errno != 0 || !end || *end != '\0' || value <= 0) {
+        fprintf(stderr, "Invalid auto-scale factor: %s\n", optarg);
+        return EXIT_FAILURE;
+      }
+      cfg.autoscale_factor = (int) value;
+      break;
+    }
+    case WRAP_OPT_AUTOSCALE_MAX_NP: {
+      errno = 0;
+      char *end = NULL;
+      long value = strtol(optarg, &end, 10);
+      if (errno != 0 || !end || *end != '\0' || value <= 0) {
+        fprintf(stderr, "Invalid auto-scale max np: %s\n", optarg);
+        return EXIT_FAILURE;
+      }
+      cfg.autoscale_max_np = (int) value;
+      break;
+    }
     case 'h':
       usage(argv[0]);
       return EXIT_SUCCESS;

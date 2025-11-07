@@ -21,7 +21,16 @@ enum {
   OPT_API_KEY_VALUE,
   OPT_VERSION,
   OPT_RESPONSE_DIR,
-  OPT_TASKS
+  OPT_RESPONSE_FILES_ON,
+  OPT_RESPONSE_FILES_OFF,
+  OPT_TASKS,
+  OPT_API_PROVIDER,
+  OPT_MAX_OUTPUT_TOKENS,
+  OPT_ANTHROPIC_VERSION,
+  OPT_NETWORK_RETRIES,
+  OPT_AUTOSCALE_MODE,
+  OPT_AUTOSCALE_THRESHOLD,
+  OPT_AUTOSCALE_FACTOR
 };
 
 static void print_version(void) {
@@ -42,10 +51,19 @@ static void print_help(const char *prog) {
        "  --config FILE              Load key=value defaults from file\n"
        "  --log-file PATH            Redirect log output\n"
        "  --response-dir DIR         Persist each chunk response as JSON\n"
+       "  --response-files / --no-response-files  Toggle per-rank response file emission (default on)\n"
        "  --tasks N                  Desired task count (auto chunking across MPI ranks)\n"
+       "  --auto-scale-threshold BYTES  Trigger size for automatic scaling (default 100MB)\n"
+       "  --auto-scale-mode MODE      Autoscale strategy: none, threads, chunks\n"
+       "  --auto-scale-factor N       Multiplier applied when autoscale fires\n"
+       "  --api-provider NAME        Target API provider: deepseek, openai, anthropic\n"
+       "  --model MODEL              Override model for OpenAI/Anthropic-compatible APIs\n"
+       "  --max-output-tokens N      Cap response tokens for OpenAI/Anthropic providers\n"
+       "  --anthropic-version DATE   Override the x-anthropic-version header\n"
        "  --timeout SECONDS          HTTP timeout\n"
        "  --max-retries N            Retry count per chunk\n"
        "  --retry-delay-ms MS        Delay between retries in milliseconds\n"
+       "  --network-retries N        MPI-level client resets after network failures\n"
        "  --tui / --no-tui           Toggle ncurses interface\n"
        "  --dry-run                  Skip HTTP calls (for smoke tests)\n"
        "  --verbose / --quiet        Adjust console verbosity\n"
@@ -122,43 +140,11 @@ static int load_config_file(ProgramConfig *cfg, const char *path) {
         *eq = '\0';
         const char *key = line;
         const char *value = eq + 1;
-        if (strcmp(key, "api_endpoint") == 0) {
-          config_replace_string(&cfg->api_endpoint, value);
-        } else if (strcmp(key, "api_key_env") == 0) {
-          config_replace_string(&cfg->api_key_env, value);
-        } else if (strcmp(key, "chunk_size") == 0) {
-          size_t tmp;
-          if (parse_size(value, &tmp) == 0) {
-            cfg->chunk_size = tmp;
-          }
-        } else if (strcmp(key, "max_retries") == 0) {
-          int tmp;
-          if (parse_int(value, &tmp) == 0) {
-            cfg->max_retries = tmp;
-          }
-        } else if (strcmp(key, "timeout") == 0) {
-          long tmp;
-          if (parse_long_value(value, &tmp) == 0) {
-            cfg->timeout_seconds = tmp;
-          }
-        } else if (strcmp(key, "log_file") == 0) {
-          config_replace_string(&cfg->log_file, value);
-        } else if (strcmp(key, "max_request_bytes") == 0) {
-          size_t tmp;
-          if (parse_size(value, &tmp) == 0) {
-            cfg->max_request_bytes = tmp;
-          }
-        } else if (strcmp(key, "dry_run") == 0) {
-          cfg->dry_run = (strcmp(value, "0") != 0 && strcasecmp(value, "false") != 0);
-        } else if (strcmp(key, "response_dir") == 0) {
-          config_replace_string(&cfg->response_dir, value);
-        } else if (strcmp(key, "tasks") == 0) {
-          size_t tmp;
-          if (parse_size(value, &tmp) == 0 && tmp > 0) {
-            cfg->target_tasks = tmp;
-            cfg->target_tasks_set = true;
-          }
+        char *kv_error = NULL;
+        if (config_apply_kv(cfg, key, value, &kv_error) != 0) {
+          fprintf(stderr, "Invalid config entry %s=%s: %s\n", key, value, kv_error ? kv_error : "unknown");
         }
+        free(kv_error);
       }
     }
     if (!next) {
@@ -199,6 +185,7 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"api-endpoint", required_argument, NULL, 'e'},
       {"api-key-env", required_argument, NULL, 'k'},
       {"api-key", required_argument, NULL, OPT_API_KEY_VALUE},
+      {"api-provider", required_argument, NULL, OPT_API_PROVIDER},
       {"chunk-size", required_argument, NULL, 'c'},
       {"log-file", required_argument, NULL, 'l'},
       {"input-file", required_argument, NULL, 'f'},
@@ -206,12 +193,21 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"timeout", required_argument, NULL, 't'},
       {"max-retries", required_argument, NULL, 'r'},
       {"retry-delay-ms", required_argument, NULL, 'd'},
+      {"network-retries", required_argument, NULL, OPT_NETWORK_RETRIES},
       {"progress-interval", required_argument, NULL, 'p'},
       {"max-request-bytes", required_argument, NULL, OPT_MAX_REQUEST},
       {"config", required_argument, NULL, OPT_CONFIG_FILE},
       {"inline-text", required_argument, NULL, 'T'},
+      {"model", required_argument, NULL, 'm'},
+      {"max-output-tokens", required_argument, NULL, OPT_MAX_OUTPUT_TOKENS},
+      {"anthropic-version", required_argument, NULL, OPT_ANTHROPIC_VERSION},
       {"response-dir", required_argument, NULL, OPT_RESPONSE_DIR},
+      {"response-files", no_argument, NULL, OPT_RESPONSE_FILES_ON},
+      {"no-response-files", no_argument, NULL, OPT_RESPONSE_FILES_OFF},
       {"tasks", required_argument, NULL, OPT_TASKS},
+      {"auto-scale-mode", required_argument, NULL, OPT_AUTOSCALE_MODE},
+      {"auto-scale-threshold", required_argument, NULL, OPT_AUTOSCALE_THRESHOLD},
+      {"auto-scale-factor", required_argument, NULL, OPT_AUTOSCALE_FACTOR},
       {"stdin", no_argument, NULL, 'S'},
       {"tui", no_argument, NULL, OPT_TUI},
       {"no-tui", no_argument, NULL, OPT_NO_TUI},
@@ -225,7 +221,7 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {0, 0, 0, 0}};
 
   int opt;
-  while ((opt = getopt_long(argc, argv, "e:k:c:l:f:t:r:d:p:T:S:qvh", long_opts, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "e:k:c:l:f:t:r:d:p:m:T:S:qvh", long_opts, NULL)) != -1) {
     switch (opt) {
     case 'e':
       config_replace_string(&config->api_endpoint, optarg);
@@ -275,6 +271,15 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       config->retry_delay_ms = value;
       break;
     }
+    case OPT_NETWORK_RETRIES: {
+      int value;
+      if (parse_int(optarg, &value) != 0) {
+        fprintf(stderr, "Invalid network retries: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config->network_retry_limit = value;
+      break;
+    }
     case 'p': {
       int value;
       if (parse_int(optarg, &value) != 0 || value <= 0) {
@@ -284,12 +289,21 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       config->progress_interval = value;
       break;
     }
+    case 'm':
+      config_replace_string(&config->model, optarg);
+      break;
     case 'T':
       config_replace_string(&config->input_text, optarg);
       config->use_tui = false;
       break;
     case OPT_RESPONSE_DIR:
       config_replace_string(&config->response_dir, optarg);
+      break;
+    case OPT_RESPONSE_FILES_ON:
+      config->response_files_enabled = true;
+      break;
+    case OPT_RESPONSE_FILES_OFF:
+      config->response_files_enabled = false;
       break;
     case OPT_TASKS: {
       size_t value;
@@ -301,9 +315,45 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       config->target_tasks_set = true;
       break;
     }
+    case OPT_API_PROVIDER: {
+      ApiProvider provider;
+      if (config_parse_provider(optarg, &provider) != 0) {
+        fprintf(stderr, "Invalid api provider: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config_set_provider(config, provider);
+      break;
+    }
     case 'S':
       config->use_stdin = true;
       break;
+    case OPT_AUTOSCALE_MODE: {
+      AutoScaleMode mode;
+      if (config_parse_autoscale_mode(optarg, &mode) != 0) {
+        fprintf(stderr, "Invalid auto-scale mode: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config->auto_scale_mode = mode;
+      break;
+    }
+    case OPT_AUTOSCALE_THRESHOLD: {
+      size_t value;
+      if (parse_size(optarg, &value) != 0) {
+        fprintf(stderr, "Invalid auto-scale threshold: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config->auto_scale_threshold_bytes = value;
+      break;
+    }
+    case OPT_AUTOSCALE_FACTOR: {
+      int value;
+      if (parse_int(optarg, &value) != 0 || value <= 0) {
+        fprintf(stderr, "Invalid auto-scale factor: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config->auto_scale_factor = value;
+      break;
+    }
     case 'q':
       config->force_quiet = true;
       config->verbosity = 0;
@@ -326,6 +376,18 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       config->max_request_bytes = value;
       break;
     }
+    case OPT_MAX_OUTPUT_TOKENS: {
+      int value;
+      if (parse_int(optarg, &value) != 0 || value <= 0) {
+        fprintf(stderr, "Invalid max output tokens: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config->max_output_tokens = value;
+      break;
+    }
+    case OPT_ANTHROPIC_VERSION:
+      config_replace_string(&config->anthropic_version, optarg);
+      break;
     case OPT_CONFIG_FILE:
       if (load_config_file(config, optarg) != 0) {
         return CLI_ERROR;
@@ -357,20 +419,6 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
 
   capture_trailing_payload(argc, argv, config);
 
-  if (config->chunk_size < DEEPSEEK_MIN_CHUNK_SIZE) {
-    config->chunk_size = DEEPSEEK_MIN_CHUNK_SIZE;
-  }
-  if (config->max_request_bytes < config->chunk_size) {
-    config->max_request_bytes = config->chunk_size * 2;
-  }
-  if (config->max_retries < 0) {
-    config->max_retries = 0;
-  }
-  if (config->timeout_seconds <= 0) {
-    config->timeout_seconds = DEEPSEEK_DEFAULT_TIMEOUT_SECONDS;
-  }
-  if (config->retry_delay_ms < 0) {
-    config->retry_delay_ms = DEEPSEEK_DEFAULT_RETRY_DELAY_MS;
-  }
+  config_finalize(config);
   return CLI_OK;
 }
