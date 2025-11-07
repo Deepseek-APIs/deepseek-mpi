@@ -52,6 +52,10 @@ static ApiProvider provider_from_endpoint(const char *endpoint) {
   if (strcasestr_bool(endpoint, "anthropic.com")) {
     return API_PROVIDER_ANTHROPIC;
   }
+  if (strcasestr_bool(endpoint, "zhipu") || strcasestr_bool(endpoint, "z.ai") ||
+      strcasestr_bool(endpoint, "bigmodel.cn")) {
+    return API_PROVIDER_ZAI;
+  }
   return API_PROVIDER_DEEPSEEK;
 }
 
@@ -65,6 +69,9 @@ static ApiProvider provider_from_env_name(const char *env) {
   if (strcasestr_bool(env, "ANTHROPIC") || strcasestr_bool(env, "CLAUDE")) {
     return API_PROVIDER_ANTHROPIC;
   }
+  if (strcasestr_bool(env, "ZAI") || strcasestr_bool(env, "GLM")) {
+    return API_PROVIDER_ZAI;
+  }
   return API_PROVIDER_DEEPSEEK;
 }
 
@@ -76,8 +83,12 @@ static ApiProvider provider_from_key_prefix(const char *key) {
       strcasestr_bool(key, "anthropic")) {
     return API_PROVIDER_ANTHROPIC;
   }
+  if (!strncasecmp(key, "gk-", 3) || !strncasecmp(key, "glm-", 4) ||
+      strcasestr_bool(key, "zhipu") || strcasestr_bool(key, "zai")) {
+    return API_PROVIDER_ZAI;
+  }
   if (!strncasecmp(key, "sk-aoai-", 8) || !strncasecmp(key, "sk-az-", 6) ||
-      !strncasecmp(key, "gk-", 3) || !strncasecmp(key, "glm-", 4) || !strncasecmp(key, "sk-", 3)) {
+      !strncasecmp(key, "sk-", 3)) {
     return API_PROVIDER_OPENAI;
   }
   if (strncasecmp(key, "ds-", 3) == 0) {
@@ -324,6 +335,8 @@ static void config_apply_provider(ProgramConfig *config, ApiProvider provider, b
       endpoint_default = true;
     } else if (previous == API_PROVIDER_ANTHROPIC && matches(config->api_endpoint, ANTHROPIC_DEFAULT_ENDPOINT)) {
       endpoint_default = true;
+    } else if (previous == API_PROVIDER_ZAI && matches(config->api_endpoint, ZAI_DEFAULT_ENDPOINT)) {
+      endpoint_default = true;
     }
   }
 
@@ -333,6 +346,8 @@ static void config_apply_provider(ProgramConfig *config, ApiProvider provider, b
     } else if (previous == API_PROVIDER_OPENAI && matches(config->api_key_env, OPENAI_DEFAULT_API_ENV)) {
       env_default = true;
     } else if (previous == API_PROVIDER_ANTHROPIC && matches(config->api_key_env, ANTHROPIC_DEFAULT_API_ENV)) {
+      env_default = true;
+    } else if (previous == API_PROVIDER_ZAI && matches(config->api_key_env, ZAI_DEFAULT_API_ENV)) {
       env_default = true;
     }
   }
@@ -353,6 +368,9 @@ static void config_apply_provider(ProgramConfig *config, ApiProvider provider, b
     case API_PROVIDER_ANTHROPIC:
       config_replace_string(&config->api_endpoint, ANTHROPIC_DEFAULT_ENDPOINT);
       break;
+    case API_PROVIDER_ZAI:
+      config_replace_string(&config->api_endpoint, ZAI_DEFAULT_ENDPOINT);
+      break;
     }
   }
 
@@ -367,14 +385,25 @@ static void config_apply_provider(ProgramConfig *config, ApiProvider provider, b
     case API_PROVIDER_ANTHROPIC:
       config_replace_string(&config->api_key_env, ANTHROPIC_DEFAULT_API_ENV);
       break;
+    case API_PROVIDER_ZAI:
+      config_replace_string(&config->api_key_env, ZAI_DEFAULT_API_ENV);
+      break;
     }
   }
 
-  if ((provider == API_PROVIDER_OPENAI || provider == API_PROVIDER_ANTHROPIC) && !config->model) {
-    if (provider == API_PROVIDER_OPENAI) {
+  if (!config->model) {
+    switch (provider) {
+    case API_PROVIDER_OPENAI:
       config_replace_string(&config->model, OPENAI_DEFAULT_MODEL);
-    } else {
+      break;
+    case API_PROVIDER_ANTHROPIC:
       config_replace_string(&config->model, ANTHROPIC_DEFAULT_MODEL);
+      break;
+    case API_PROVIDER_ZAI:
+      config_replace_string(&config->model, ZAI_DEFAULT_MODEL);
+      break;
+    default:
+      break;
     }
   }
 
@@ -397,6 +426,8 @@ int config_parse_provider(const char *text, ApiProvider *out) {
     *out = API_PROVIDER_OPENAI;
   } else if (strcasecmp(text, "anthropic") == 0) {
     *out = API_PROVIDER_ANTHROPIC;
+  } else if (strcasecmp(text, "zai") == 0 || strcasecmp(text, "glm") == 0 || strcasecmp(text, "zhipu") == 0) {
+    *out = API_PROVIDER_ZAI;
   } else {
     return -1;
   }

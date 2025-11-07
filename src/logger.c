@@ -6,7 +6,7 @@
 #include <string.h>
 #include <time.h>
 
-static const char *level_to_string(LoggerLevel level) {
+const char *logger_level_to_string(LoggerLevel level) {
   switch (level) {
   case LOG_LEVEL_DEBUG:
     return "DEBUG";
@@ -41,6 +41,8 @@ int logger_init(Logger *logger, const char *path, int process_rank, int verbosit
   logger->verbosity = verbosity;
   logger->mirror_stdout = true;
   logger->handle = NULL;
+  logger->sink = NULL;
+  logger->sink_user_data = NULL;
   if (path) {
     FILE *fp = fopen(path, "a");
     if (!fp) {
@@ -86,12 +88,15 @@ void logger_log(Logger *logger, LoggerLevel level, const char *fmt, ...) {
   va_end(args);
 
   if (logger->mirror_stdout) {
-    fprintf(stdout, "[%s] %s [rank %d] | %s\n", timestamp, level_to_string(level), logger->process_rank, line);
+    fprintf(stdout, "[%s] %s [rank %d] | %s\n", timestamp, logger_level_to_string(level), logger->process_rank, line);
     fflush(stdout);
   }
   if (fp) {
-    fprintf(fp, "[%s] %s [rank %d] | %s\n", timestamp, level_to_string(level), logger->process_rank, line);
+    fprintf(fp, "[%s] %s [rank %d] | %s\n", timestamp, logger_level_to_string(level), logger->process_rank, line);
     fflush(fp);
+  }
+  if (logger->sink) {
+    logger->sink(level, logger->process_rank, timestamp, line, logger->sink_user_data);
   }
   free(line);
 }
@@ -105,4 +110,12 @@ void logger_close(Logger *logger) {
     fclose(fp);
   }
   logger->handle = NULL;
+}
+
+void logger_set_sink(Logger *logger, LoggerSinkFn sink, void *user_data) {
+  if (!logger) {
+    return;
+  }
+  logger->sink = sink;
+  logger->sink_user_data = user_data;
 }

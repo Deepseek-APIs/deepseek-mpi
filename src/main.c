@@ -490,7 +490,25 @@ int main(int argc, char **argv) {
   }
 
   Payload shared_payload = {shared_buffer, payload_len};
+  bool tui_log_active = false;
+  bool original_mirror = logger.mirror_stdout;
+  if (config.rank == 0 && config.use_tui) {
+    if (tui_log_view_start() == 0) {
+      logger_set_sink(&logger, tui_logger_sink, NULL);
+      logger.mirror_stdout = false;
+      tui_log_active = true;
+    } else {
+      logger_log(&logger, LOG_LEVEL_WARN, "Unable to initialize TUI log view; falling back to stdout logs");
+    }
+  }
+
   process_chunks(&config, &logger, &shared_payload);
+
+  if (tui_log_active) {
+    logger_set_sink(&logger, NULL, NULL);
+    logger.mirror_stdout = original_mirror;
+    tui_log_view_stop();
+  }
 
   if (rank == 0) {
     free(payload.data);

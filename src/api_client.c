@@ -138,6 +138,8 @@ static const char *resolve_model(const ProgramConfig *config, ApiProvider provid
     return OPENAI_DEFAULT_MODEL;
   case API_PROVIDER_ANTHROPIC:
     return ANTHROPIC_DEFAULT_MODEL;
+  case API_PROVIDER_ZAI:
+    return ZAI_DEFAULT_MODEL;
   default:
     return "";
   }
@@ -153,8 +155,9 @@ static int resolve_max_tokens(const ProgramConfig *config) {
   return AI_DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
-static char *build_payload_openai(const ProgramConfig *config, const char *chunk, size_t chunk_len) {
-  const char *model = resolve_model(config, API_PROVIDER_OPENAI);
+static char *build_payload_openai_style(const ProgramConfig *config, const char *chunk, size_t chunk_len,
+                                        ApiProvider provider) {
+  const char *model = resolve_model(config, provider);
   int max_tokens = resolve_max_tokens(config);
   StringBuffer buffer;
   sb_init(&buffer);
@@ -203,9 +206,11 @@ static char *build_payload_for_provider(const ProgramConfig *config, const char 
   }
   switch (config->provider) {
   case API_PROVIDER_OPENAI:
-    return build_payload_openai(config, chunk, chunk_len);
+    return build_payload_openai_style(config, chunk, chunk_len, API_PROVIDER_OPENAI);
   case API_PROVIDER_ANTHROPIC:
     return build_payload_anthropic(config, chunk, chunk_len);
+  case API_PROVIDER_ZAI:
+    return build_payload_openai_style(config, chunk, chunk_len, API_PROVIDER_ZAI);
   case API_PROVIDER_DEEPSEEK:
   default:
     return build_payload_deepseek(chunk, chunk_len, chunk_index);

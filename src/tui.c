@@ -169,3 +169,55 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
   *output_len = payload_len;
   return 0;
 }
+
+static WINDOW *tui_log_window = NULL;
+
+int tui_log_view_start(void) {
+  if (tui_log_window) {
+    return 0;
+  }
+  if (!initscr()) {
+    return -1;
+  }
+  cbreak();
+  noecho();
+  keypad(stdscr, TRUE);
+  curs_set(0);
+  werase(stdscr);
+  box(stdscr, 0, 0);
+  mvwprintw(stdscr, 0, 2, " MPI Output (press Ctrl+C to abort rank 0) ");
+  mvwprintw(stdscr, LINES - 2, 2, "Logs stream here; job exits when processing completes.");
+  wrefresh(stdscr);
+  int height = LINES - 3;
+  if (height < 3) {
+    height = LINES - 1;
+  }
+  tui_log_window = derwin(stdscr, height, COLS - 2, 1, 1);
+  if (!tui_log_window) {
+    endwin();
+    return -1;
+  }
+  scrollok(tui_log_window, TRUE);
+  wrefresh(tui_log_window);
+  return 0;
+}
+
+void tui_log_view_stop(void) {
+  if (!tui_log_window) {
+    return;
+  }
+  delwin(tui_log_window);
+  tui_log_window = NULL;
+  endwin();
+}
+
+void tui_logger_sink(LoggerLevel level, int process_rank, const char *timestamp, const char *message, void *unused) {
+  (void) unused;
+  if (!tui_log_window) {
+    return;
+  }
+  wattron(tui_log_window, A_NORMAL);
+  wprintw(tui_log_window, "[%s] %s [rank %d] | %s\n", timestamp, logger_level_to_string(level), process_rank,
+          message ? message : "");
+  wrefresh(tui_log_window);
+}

@@ -22,6 +22,10 @@
 #define OPENAI_DEFAULT_MODEL             "gpt-4o-mini"
 #define OPENAI_DEFAULT_API_ENV           "OPENAI_API_KEY"
 
+#define ZAI_DEFAULT_ENDPOINT             "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+#define ZAI_DEFAULT_MODEL                "glm-4-plus"
+#define ZAI_DEFAULT_API_ENV              "ZAI_API_KEY"
+
 #define ANTHROPIC_DEFAULT_ENDPOINT       "https://api.anthropic.com/v1/messages"
 #define ANTHROPIC_DEFAULT_MODEL          "claude-3-5-sonnet-20240620"
 #define ANTHROPIC_DEFAULT_API_ENV        "ANTHROPIC_API_KEY"
