@@ -467,12 +467,44 @@ static bool maybe_autoscale_wrapper(WrapperConfig *cfg, Conversation *conv, size
   return true;
 }
 
+static void append_error_output(StringBuffer *output, const char *message) {
+  if (!output || !message) {
+    return;
+  }
+  sb_append_str(output, "ERROR: ");
+  sb_append_str(output, message);
+  sb_append_char(output, '\n');
+}
+
 static int spawn_and_capture(char *const argv[], StringBuffer *output, char *errbuf, size_t errlen) {
   int pipefd[2];
   if (pipe(pipefd) != 0) {
     snprintf(errbuf, errlen, "pipe failed: %s", strerror(errno));
     return -1;
   }
+
+  const char *path_env = getenv("PATH");
+  const char *ompi_bin = "/usr/lib64/openmpi/bin";
+  if (!path_env || strstr(path_env, ompi_bin) == NULL) {
+    size_t base_len = path_env ? strlen(path_env) : 0;
+    size_t extra_len = strlen(ompi_bin);
+    size_t total = base_len > 0 ? base_len + 1 + extra_len + 1 : extra_len + 1;
+    char *augmented = malloc(total);
+    if (!augmented) {
+      snprintf(errbuf, errlen, "unable to allocate PATH augmentation");
+      close(pipefd[0]);
+      close(pipefd[1]);
+      return -1;
+    }
+    if (base_len > 0) {
+      snprintf(augmented, total, "%s:%s", path_env, ompi_bin);
+    } else {
+      snprintf(augmented, total, "%s", ompi_bin);
+    }
+    setenv("PATH", augmented, 1);
+    free(augmented);
+  }
+
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
   posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
@@ -485,7 +517,13 @@ static int spawn_and_capture(char *const argv[], StringBuffer *output, char *err
   posix_spawn_file_actions_destroy(&actions);
   close(pipefd[1]);
   if (rc != 0) {
-    snprintf(errbuf, errlen, "posix_spawnp failed: %s", strerror(rc));
+    if (rc == ENOENT) {
+      snprintf(errbuf, errlen, "%s not found in PATH (install or load mpirun)", argv[0]);
+    } else {
+      snprintf(errbuf, errlen, "posix_spawnp failed: %s", strerror(rc));
+    }
+    append_error_output(output, errbuf);
+    fprintf(stderr, "%s\n", errbuf);
     close(pipefd[0]);
     return -1;
   }
@@ -502,7 +540,14 @@ static int spawn_and_capture(char *const argv[], StringBuffer *output, char *err
   if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
     return 0;
   }
-  snprintf(errbuf, errlen, "mpirun exited with status %d", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+  int exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  if (exit_status == 127) {
+    snprintf(errbuf, errlen, "mpirun exited with 127 (mpirun or %s missing/executable?)", argv[3]);
+  } else {
+    snprintf(errbuf, errlen, "mpirun exited with status %d", exit_status);
+  }
+  append_error_output(output, errbuf);
+  fprintf(stderr, "%s\n", errbuf);
   return -1;
 }
 
@@ -545,15 +590,32 @@ static int build_command(const WrapperConfig *cfg, const char *payload_path, cha
   return 0;
 }
 
+static void report_wrapper_error(Conversation *conv, StringBuffer *last_output, const char *message) {
+  if (last_output) {
+    sb_reset(last_output);
+  }
+  if (message) {
+    if (last_output) {
+      sb_append_str(last_output, message);
+      sb_append_char(last_output, '\n');
+    }
+    if (conv) {
+      conversation_add(conv, "System-MPI", message);
+    }
+  }
+}
+
 static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *last_output, char *status_buf,
                          size_t status_len) {
   if (!cfg || !conv) {
     snprintf(status_buf, status_len, "internal error: missing cfg");
+    report_wrapper_error(conv, last_output, status_buf);
     return -1;
   }
   char payload_path[] = "/tmp/deepseek_payloadXXXXXX";
   if (write_payload_file(conv, payload_path) != 0) {
     snprintf(status_buf, status_len, "unable to create payload file");
+    report_wrapper_error(conv, last_output, status_buf);
     return -1;
   }
 
@@ -571,6 +633,7 @@ static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *l
   char *argv[32];
   if (build_command(cfg, payload_path, argv, sizeof argv / sizeof(argv[0])) != 0) {
     snprintf(status_buf, status_len, "failed to prepare mpi command");
+    report_wrapper_error(conv, last_output, status_buf);
     unlink(payload_path);
     cfg->np = saved_np;
     cfg->tasks = saved_tasks;
@@ -586,6 +649,7 @@ static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *l
 
   if (rc != 0) {
     snprintf(status_buf, status_len, "%s", errbuf);
+    report_wrapper_error(conv, last_output, status_buf);
     sb_clean(&response);
     cfg->np = saved_np;
     cfg->tasks = saved_tasks;
