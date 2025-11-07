@@ -3,14 +3,15 @@
 #include "app_config.h"
 #include "string_buffer.h"
 
-#include <readline/history.h>
-#include <readline/readline.h>
-
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <stdio.h>
+
+#include <readline/history.h>
+#include <readline/readline.h>
 
 static void rl_set_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
