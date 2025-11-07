@@ -1,5 +1,9 @@
 #include "tui.h"
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <limits.h>
 #include <ncurses.h>
 #include <signal.h>
