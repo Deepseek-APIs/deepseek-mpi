@@ -57,6 +57,7 @@ typedef struct {
   int rank;
   int world_size;
   ApiProvider provider;
+  bool provider_locked;
   AutoScaleMode auto_scale_mode;
   size_t auto_scale_threshold_bytes;
   int auto_scale_factor;

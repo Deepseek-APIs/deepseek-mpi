@@ -1,5 +1,6 @@
 #include "app_config.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -7,6 +8,101 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+
+static void config_apply_provider(ProgramConfig *config, ApiProvider provider, bool lock);
+
+static bool strcasestr_bool(const char *haystack, const char *needle) {
+  if (!haystack || !needle || !*needle) {
+    return false;
+  }
+  size_t needle_len = strlen(needle);
+  for (const char *p = haystack; *p; ++p) {
+    size_t i = 0;
+    while (p[i] && i < needle_len &&
+           tolower((unsigned char) p[i]) == tolower((unsigned char) needle[i])) {
+      ++i;
+    }
+    if (i == needle_len) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static const char *resolved_api_key(const ProgramConfig *config) {
+  if (!config) {
+    return NULL;
+  }
+  if (config->explicit_api_key && config->explicit_api_key[0] != '\0') {
+    return config->explicit_api_key;
+  }
+  if (config->api_key_env && config->api_key_env[0] != '\0') {
+    return getenv(config->api_key_env);
+  }
+  return NULL;
+}
+
+static ApiProvider provider_from_endpoint(const char *endpoint) {
+  if (!endpoint) {
+    return API_PROVIDER_DEEPSEEK;
+  }
+  if (strcasestr_bool(endpoint, "openai.com")) {
+    return API_PROVIDER_OPENAI;
+  }
+  if (strcasestr_bool(endpoint, "anthropic.com")) {
+    return API_PROVIDER_ANTHROPIC;
+  }
+  return API_PROVIDER_DEEPSEEK;
+}
+
+static ApiProvider provider_from_env_name(const char *env) {
+  if (!env) {
+    return API_PROVIDER_DEEPSEEK;
+  }
+  if (strcasestr_bool(env, "OPENAI")) {
+    return API_PROVIDER_OPENAI;
+  }
+  if (strcasestr_bool(env, "ANTHROPIC") || strcasestr_bool(env, "CLAUDE")) {
+    return API_PROVIDER_ANTHROPIC;
+  }
+  return API_PROVIDER_DEEPSEEK;
+}
+
+static ApiProvider provider_from_key_prefix(const char *key) {
+  if (!key || !*key) {
+    return API_PROVIDER_DEEPSEEK;
+  }
+  if (!strncasecmp(key, "sk-ant-", 7) || !strncasecmp(key, "sk-claude", 9) ||
+      strcasestr_bool(key, "anthropic")) {
+    return API_PROVIDER_ANTHROPIC;
+  }
+  if (!strncasecmp(key, "sk-aoai-", 8) || !strncasecmp(key, "sk-az-", 6) ||
+      !strncasecmp(key, "gk-", 3) || !strncasecmp(key, "glm-", 4) || !strncasecmp(key, "sk-", 3)) {
+    return API_PROVIDER_OPENAI;
+  }
+  if (strncasecmp(key, "ds-", 3) == 0) {
+    return API_PROVIDER_DEEPSEEK;
+  }
+  return API_PROVIDER_DEEPSEEK;
+}
+
+static void config_autodetect_provider(ProgramConfig *config) {
+  if (!config || config->provider_locked) {
+    return;
+  }
+
+  ApiProvider detected = provider_from_endpoint(config->api_endpoint);
+  if (detected == API_PROVIDER_DEEPSEEK) {
+    detected = provider_from_env_name(config->api_key_env);
+  }
+  if (detected == API_PROVIDER_DEEPSEEK) {
+    detected = provider_from_key_prefix(resolved_api_key(config));
+  }
+
+  if (detected != API_PROVIDER_DEEPSEEK) {
+    config_apply_provider(config, detected, false);
+  }
+}
 
 static void cfg_assign_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
@@ -149,6 +245,7 @@ ProgramConfig config_defaults(void) {
   cfg.rank = 0;
   cfg.world_size = 1;
   cfg.provider = API_PROVIDER_DEEPSEEK;
+  cfg.provider_locked = false;
   cfg.auto_scale_mode = AUTOSCALE_MODE_NONE;
   cfg.auto_scale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
   cfg.auto_scale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
@@ -167,6 +264,7 @@ void config_record_rank(ProgramConfig *config, int rank, int world_size) {
   if (!config) {
     return;
   }
+  config_autodetect_provider(config);
   config->rank = rank;
   config->world_size = world_size;
 }
@@ -206,8 +304,12 @@ void config_free(ProgramConfig *config) {
   config->auto_scale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
 }
 
-void config_set_provider(ProgramConfig *config, ApiProvider provider) {
+static void config_apply_provider(ProgramConfig *config, ApiProvider provider, bool lock) {
   if (!config) {
+    return;
+  }
+
+  if (config->provider_locked && !lock) {
     return;
   }
 
@@ -236,6 +338,9 @@ void config_set_provider(ProgramConfig *config, ApiProvider provider) {
   }
 
   config->provider = provider;
+  if (lock) {
+    config->provider_locked = true;
+  }
 
   if (endpoint_default) {
     switch (provider) {
@@ -276,6 +381,10 @@ void config_set_provider(ProgramConfig *config, ApiProvider provider) {
   if (provider == API_PROVIDER_ANTHROPIC && !config->anthropic_version) {
     config_replace_string(&config->anthropic_version, ANTHROPIC_DEFAULT_VERSION);
   }
+}
+
+void config_set_provider(ProgramConfig *config, ApiProvider provider) {
+  config_apply_provider(config, provider, true);
 }
 
 int config_parse_provider(const char *text, ApiProvider *out) {
