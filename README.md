@@ -22,6 +22,7 @@ The repository includes a GitBook-ready documentation tree under `/docs` with a 
 - [docs/quickstart.md](docs/quickstart.md) – clean-room builds, dependency installs, running, and testing.
 - [docs/cli.md](docs/cli.md) – full CLI flag reference grouped by category.
 - [docs/configuration.md](docs/configuration.md) – config files, environment variables, and default values.
+- [docs/operations.md](docs/operations.md) – logging, autoscaling runbooks, and wrapper/attachment tips for day‑2 operations.
 - [docs/gitbook.md](docs/gitbook.md) – step-by-step instructions for connecting this repo to GitBook, polishing the space, and automating syncs.
 
 Import the repo into GitBook (Organization → New Space → Import from GitHub) and point it at `main`; GitBook will automatically pick up `SUMMARY.md` for the sidebar.
@@ -67,7 +68,8 @@ open doc/html/index.html
 ## CLI Highlights
 - `--api-endpoint https://api.deepseek.com/v1/process`
 - `--api-provider openai --model gpt-4o-mini` flips the payload/header layout for OpenAI-compatible JSON APIs (also works with Azure, OpenRouter, etc.).
-- `--api-provider anthropic --model claude-3-5-sonnet-20240620 --anthropic-version 2023-06-01` targets Anthropic-compatible endpoints such as z.ai.
+- `--api-provider anthropic --model claude-3-5-sonnet-20240620 --anthropic-version 2023-06-01` targets Anthropic’s official Claude endpoints.
+- `--api-provider zai --model glm-4-plus --api-key-env ZAI_API_KEY` talks to z.ai’s GLM APIs (payload schema matches OpenAI chat completions).
 - `--api-key-env API_TOKEN`
 - `--chunk-size 4096` (bytes per segment)
 - `--input-file payload.txt` or `--stdin`
@@ -85,7 +87,7 @@ open doc/html/index.html
 - `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
 - `--tasks 16` divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
 - `--auto-scale-mode chunks --auto-scale-threshold 100000000 --auto-scale-factor 4` splits giant uploads into additional logical tasks; swap `chunks` for `threads` (via the wrapper) to bump `mpirun -np` automatically once the threshold is crossed
-- Provider auto-detect kicks in automatically: if your endpoint contains `openai.com`, your env var is `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or your key begins with prefixes such as `sk-ant-`, `sk-claude`, or `gk-`, the client switches to the matching provider so you don’t have to pass `--api-provider`. Use `--api-provider` to override.
+- Provider auto-detect kicks in automatically: if your endpoint contains `openai.com`, `anthropic.com`, or `bigmodel.cn`, your env var is `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ZAI_API_KEY`, or your key begins with prefixes such as `sk-ant-`, `sk-claude`, `gk-`, or `glm-`, the client switches to the matching provider so you don’t have to pass `--api-provider`. Use `--api-provider` to override.
 
 Combine options freely; every flag is also available from a simple key/value config file via `--config my.conf` with entries such as `chunk_size=2048` or `api_endpoint=https://api.deepseek.com/...`.
 
@@ -99,8 +101,9 @@ Combine options freely; every flag is also available from a simple key/value con
 - Response files are enabled by default (saved under `responses/` per rank/chunk). Disable with `--no-response-files` if you only want log output.
 - `--tasks` ensures the entire file (including large spreadsheets) is read once and then auto-sliced, so you’re never limited by the number of hardware threads on the box.
 - Autoscaling keeps big drops moving: chunk mode divides payloads across existing ranks, while wrapper `--auto-scale-mode threads` multiplies the MPI rank count on the fly when a prompt crosses your size threshold.
-- Provider detection is automatic: endpoints, environment variable names, and well-known key prefixes (OpenAI `sk-`, Anthropic `sk-ant-`, GLM `gk-`, etc.) steer the client toward the right REST API. Explicitly set `--api-provider` if you need to override the heuristic.
+- Provider detection is automatic: endpoints, environment variable names, and well-known key prefixes (OpenAI `sk-`, Anthropic `sk-ant-`, GLM `gk-`/`glm-`, etc.) steer the client toward the right REST API. Explicitly set `--api-provider` if you need to override the heuristic.
 - Inside the ncurses TUI, use `:set key=value`, `:show-config`, or `:config-help` to tweak runtime settings (endpoints, chunk sizes, providers, etc.) before launching the MPI job.
+- With `--tui` enabled, MPI logs now stream live inside the ncurses window instead of bouncing back to raw stdout, so you can watch rank activity without the screen flicker.
 - Use the `deepseek_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
 - Use git for change tracking – a clean history keeps regressions easy to spot.
 - When you need a guided UX, run `./src/deepseek_wrapper --np 4 --binary ./src/deepseek_mpi`. Every time you hit Enter the wrapper gathers the ongoing conversation, writes a payload file, and invokes `mpirun` with the requested rank count. Type `:quit` or press `Esc` to exit.

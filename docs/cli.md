@@ -4,7 +4,7 @@ description: Every flag exposed by deepseek_mpi, grouped by category.
 
 # CLI Reference
 
-Deepseek MPI exposes a comprehensive CLI so you can control inputs, API providers, chunk sizing, retries, and logging from the command line or scripts. Every flag has a long-form equivalent; short forms are shown where applicable.
+Deepseek MPI exposes a comprehensive CLI so you can control inputs, API providers, chunk sizing, retries, autoscaling, and logging from the command line or scripts. Every flag has a long-form equivalent; short forms are shown where applicable.
 
 ## Input & Payload Capture
 
@@ -16,14 +16,15 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--tui` / `--no-tui` | Enable or disable the ncurses prompt on rank 0. |
 | `--tasks N` | Desired logical task count; chunk size auto-adjusts. |
 | `--allow-file-prompt` | Enable TUI file attach (default on). |
+| `--readline` / `--no-readline` | Toggle the GNU Readline prompt used when the TUI is disabled. |
 
 ## API Provider & Authentication
 
 | Flag | Description |
 |------|-------------|
 | `--api-endpoint URL`, `-e URL` | Override the HTTP endpoint. Defaults auto-switch when you change providers. |
-| `--api-provider NAME` | `deepseek` (default), `openai`, or `anthropic`. |
-| `--model ID`, `-m ID` | Model identifier for OpenAI/Anthropic providers (e.g., `gpt-4o-mini`, `claude-3-5-sonnet-20240620`). |
+| `--api-provider NAME` | `deepseek` (default), `openai`, `anthropic`, or `zai` (GLM from z.ai). |
+| `--model ID`, `-m ID` | Model identifier for OpenAI/Anthropic/Zai providers (e.g., `gpt-4o-mini`, `claude-3-5-sonnet-20240620`, `glm-4-plus`). |
 | `--anthropic-version DATE` | Override the `anthropic-version` header (defaults to `2023-06-01`). |
 | `--api-key-env NAME`, `-k NAME` | Environment variable to read the API key from. |
 | `--api-key VALUE` | Inline API key (overrides env). Handy for CI secrets or single-use keys. |
@@ -35,6 +36,9 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--chunk-size BYTES`, `-c BYTES` | Fixed chunk size per logical task. Minimum enforced via `DEEPSEEK_MIN_CHUNK_SIZE`. |
 | `--max-request-bytes BYTES` | Upper bound for encoded payload (defaults to ≥ chunk size). |
 | `--max-output-tokens N` | Clamp model responses for OpenAI/Anthropic backends. |
+| `--auto-scale-mode MODE` | `none`, `chunks`, or `threads`. Chunks mode multiplies `--tasks`; threads mode logs guidance (wrapper handles actual rank scaling). |
+| `--auto-scale-threshold BYTES` | Trigger size for autoscaling. |
+| `--auto-scale-factor N` | Multiplier applied when the threshold is exceeded. |
 
 ## Reliability & Retries
 
@@ -84,6 +88,29 @@ cat payload.txt | mpirun -np 8 ./src/deepseek_mpi \
   --max-retries 5 \
   --retry-delay-ms 750 \
   --network-retries 3
+
+# Autoscale example (chunks mode)
+mpirun -np 4 ./src/deepseek_mpi \
+  --input-file huge.md \
+  --auto-scale-mode chunks \
+  --auto-scale-threshold 150000000 \
+  --auto-scale-factor 4
 ```
 
 Refer back to the [Configuration guide](configuration.md) for default values, environment variables, and config-file syntax. GitBook users can expose these tables as separate chapters if desired; simply adjust `SUMMARY.md` accordingly.
+
+## Wrapper Flags (Preview)
+
+The `deepseek_wrapper` binary has its own CLI; highlights:
+
+| Flag | Description |
+| --- | --- |
+| `--np N` | MPI ranks per prompt (default `2`). |
+| `--binary PATH` | Path to `deepseek_mpi` (default `./src/deepseek_mpi`). |
+| `--response-dir DIR` | Where to store per-chunk responses (default `responses/`). |
+| `--auto-scale-mode MODE` | Same semantics as the core autoscale mode, but threads mode actually bumps `mpirun -np`. |
+| `--auto-scale-threshold BYTES` | Payload size that triggers autoscaling. |
+| `--auto-scale-factor N` | Multiplier for tasks/ranks. |
+| `--auto-scale-max-np N` | Cap on autoscaled ranks (prevents runaway concurrency). |
+
+Wrapper slash commands mirror these flags, so operators can tweak runs without leaving the terminal.

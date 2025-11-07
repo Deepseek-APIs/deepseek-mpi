@@ -25,6 +25,7 @@ When debugging, run `./src/deepseek_mpi --verbosity 2` to see the resolved confi
 | API key env var | `DEEPSEEK_API_KEY` | Switches to `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` if you change providers (unless overridden). |
 | Chunk size | `2048` bytes | Clamped by `DEEPSEEK_MIN_CHUNK_SIZE`. |
 | Max request bytes | `16384` | Guardrail for encoded payload size. |
+| Tasks | `0` (disabled) | Autoset only when `--tasks` or autoscale chunks mode kicks in. |
 | Max retries | `3` | libcurl retry attempts per chunk. |
 | Retry delay | `500 ms` | Backoff doubles up to ~4 s unless you override. |
 | Network retries | `2` | MPI-level client resets after transient network errors. |
@@ -32,16 +33,20 @@ When debugging, run `./src/deepseek_mpi --verbosity 2` to see the resolved confi
 | Progress interval | `1` | Log every chunk per rank unless you increase it. |
 | Verbosity | `1` | Level 0 suppresses info logs, level 2 enables debug logs. |
 | Max output tokens | `1024` | Used when crafting OpenAI/Anthropic payloads. |
+| Autoscale mode | `none` | `chunks` and `threads` require explicit opt-in. |
+| Autoscale threshold | `100 MB` | Multiplies tasks/ranks when exceeded (mode dependent). |
+| Autoscale factor | `2` | Doubling is a good starting point. |
 | Show progress | `true` | Toggle with `--hide-progress`. |
-| Use TUI | `true` | Disable via `--no-tui`. |
+| Use TUI | `true` | Disable via `--no-tui` or `use_tui=false`. |
+| Use Readline | `true` | When the TUI is disabled, fallback to GNU Readline. |
 | Dry run | `false` | No HTTP requests when enabled. |
 
 ## Config Files
 
 Config files are plain `key=value` documents processed before CLI flags. Supported keys include:
 
-- Endpoint & auth: `api_endpoint`, `api_key_env`, `api_key`, `api_provider`, `model`, `anthropic_version`.
-- Chunking & limits: `chunk_size`, `max_request_bytes`, `tasks`.
+- Endpoint & auth: `api_endpoint`, `api_key_env`, `api_key`, `api_provider` (`deepseek`, `openai`, `anthropic`, `zai`), `model`, `anthropic_version`.
+- Chunking & limits: `chunk_size`, `max_request_bytes`, `tasks`, `auto_scale_mode`, `auto_scale_threshold`, `auto_scale_factor`.
 - Reliability: `max_retries`, `network_retries`, `retry_delay_ms`, `timeout`.
 - Logging & UX: `log_file`, `response_dir`, `progress_interval`, `verbosity`, `show_progress`, `use_tui`, `dry_run`, `force_quiet`.
 - Inputs: `input_file`, `inline_text`, `use_stdin`, `allow_file_prompt`.
@@ -84,13 +89,37 @@ Load multiple files if needed:
 
 Track the aggregated stats in the logs—rank 0 prints `processed`, `failures`, and `network_failures` once all ranks finish.
 
+## Autoscaling & Workload Tuning
+
+| Mode | Behavior |
+| --- | --- |
+| `none` | Default. Payload size does not influence tasks. |
+| `chunks` | Multiplies the logical task count (`base_tasks * auto_scale_factor`) when `payload_size >= auto_scale_threshold`. |
+| `threads` | Logs guidance because MPI ranks are fixed mid-run. Use `deepseek_wrapper` to actually scale `mpirun -np`. |
+
+Best practice: set `auto_scale_threshold` slightly below the payload where you notice timeouts, and start with `auto_scale_factor=2`. Combine with `--tasks` to ensure a non-zero baseline.
+
 ## Response Persistence
 
 Set `response_dir` to a writable path to capture every successful chunk response as `chunk-<index>-r<rank>.json`. This is useful for audit trails, debugging, and offline processing.
 
+Disable persistence with `--no-response-files` (or `response_files_enabled=false` inside config files) when you don’t want artifacts on disk.
+
+## Logging, Readline, and UX
+
+- `use_tui=false` switches rank 0 to non-interactive mode. Pair with `--readline` (default `true`) to retain history/editing.
+- `log_file=/var/log/deepseek/rank.log` enables per-rank file logging; combine with `force_quiet=true` when you only want on-disk logs.
+- `progress_interval=N` throttles info logs for massive jobs (e.g., print every 100 chunks).
+
 ## Attachment & Wrapper Dependencies
 
 If you build with `libxml2`, `libmagic`, and `libarchive`, the `deepseek_wrapper` binary can sniff and ingest more attachment types. The MPI core is happy without them; missing libraries simply disable those extras.
+
+## Security & Secrets
+
+- Avoid storing API keys in config files; prefer `api_key_env` and supply secrets via environment variables or secret managers.
+- Use `--dry-run` when testing pipelines that shouldn’t hit live APIs.
+- For multi-tenant clusters, run Deepseek MPI under a dedicated Unix user and restrict `response_dir` to that user/group.
 
 ## Related Pages
 
