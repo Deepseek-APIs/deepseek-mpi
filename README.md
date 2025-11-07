@@ -74,6 +74,12 @@ Combine options freely; every flag is also available from a simple key/value con
 - Use the `deepseek_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
 - Use git for change tracking – a clean history keeps regressions easy to spot.
 - When you need a guided UX, run `./src/deepseek_wrapper --np 4 --binary ./src/deepseek_mpi`. Every time you hit Enter the wrapper gathers the ongoing conversation, writes a payload file, and invokes `mpirun` with the requested rank count. Type `:quit` or press `Esc` to exit.
+- The wrapper understands slash commands: `/help`, `/attach some.png`, `/np 8`, `/tasks 32`, `/chunk 8192`, `/dry-run off`, `/clear`, `/quit`. Attachments automatically detect text vs. binary; documents are inlined and large/binary files are base64 encoded so DeepSeek sees the full content.
+
+### File Attachments & REPL UI
+- `/attach` accepts common formats (TXT, CSV, XLSX, PDF, PNG, etc.). Text-based files are streamed directly (with truncation notices for very large files). Binary formats are base64 encoded with metadata.
+- The ncurses UI now shows a chat-style history pane, a live REPL prompt, and a "Last Output" panel so you can inspect the raw MPI logs from the previous inference.
+- Slash commands let you reconfigure ranks, logical tasks, chunk size, and dry-run mode without restarting the wrapper.
 
 ## License
 SPDX-License-Identifier: MIT

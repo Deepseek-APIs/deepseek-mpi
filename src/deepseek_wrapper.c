@@ -1,8 +1,10 @@
+#include <ctype.h>
 #include <curses.h>
 #include <errno.h>
 #include <getopt.h>
 #include <spawn.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,7 +38,14 @@ typedef struct {
   size_t chunk_size;
   bool chunk_size_set;
   bool dry_run;
+  size_t tasks;
+  bool tasks_set;
 } WrapperConfig;
+
+typedef enum {
+  ATTACH_TEXT,
+  ATTACH_BINARY
+} AttachmentKind;
 
 static void conversation_free(Conversation *conv) {
   if (!conv) {
@@ -73,6 +82,33 @@ static void conversation_add(Conversation *conv, const char *role, const char *t
   }
 }
 
+static void conversation_clear(Conversation *conv) {
+  if (!conv) {
+    return;
+  }
+  conversation_free(conv);
+  conv->items = NULL;
+  conv->count = 0;
+  conv->capacity = 0;
+}
+
+static char *lstrip(char *text) {
+  while (text && *text && isspace((unsigned char) *text)) {
+    ++text;
+  }
+  return text;
+}
+
+static void rstrip(char *text) {
+  if (!text) {
+    return;
+  }
+  size_t len = strlen(text);
+  while (len > 0 && isspace((unsigned char) text[len - 1])) {
+    text[--len] = '\0';
+  }
+}
+
 static void draw_conversation(WINDOW *outer, WINDOW *inner, const Conversation *conv) {
   if (!outer || !inner || !conv) {
     return;
@@ -89,6 +125,55 @@ static void draw_conversation(WINDOW *outer, WINDOW *inner, const Conversation *
   }
   wrefresh(outer);
   wrefresh(inner);
+}
+
+static void destroy_windows(WINDOW **conv_outer, WINDOW **conv_inner, WINDOW **output_win, WINDOW **status_win,
+                            WINDOW **input_win) {
+  if (conv_inner && *conv_inner) {
+    delwin(*conv_inner);
+    *conv_inner = NULL;
+  }
+  if (conv_outer && *conv_outer) {
+    delwin(*conv_outer);
+    *conv_outer = NULL;
+  }
+  if (output_win && *output_win) {
+    delwin(*output_win);
+    *output_win = NULL;
+  }
+  if (status_win && *status_win) {
+    delwin(*status_win);
+    *status_win = NULL;
+  }
+  if (input_win && *input_win) {
+    delwin(*input_win);
+    *input_win = NULL;
+  }
+}
+
+static void build_windows(WINDOW **conv_outer, WINDOW **conv_inner, WINDOW **output_win, WINDOW **status_win,
+                          WINDOW **input_win) {
+  destroy_windows(conv_outer, conv_inner, output_win, status_win, input_win);
+  int conv_height = LINES - 10;
+  if (conv_height < 6) {
+    conv_height = 6;
+  }
+  *conv_outer = newwin(conv_height, COLS, 0, 0);
+  *conv_inner = derwin(*conv_outer, conv_height - 2, COLS - 2, 1, 1);
+  scrollok(*conv_inner, TRUE);
+
+  int output_height = 4;
+  int output_y = conv_height;
+  *output_win = newwin(output_height, COLS, output_y, 0);
+
+  int status_y = output_y + output_height;
+  *status_win = newwin(3, COLS, status_y, 0);
+
+  int input_y = status_y + 3;
+  if (input_y + 3 > LINES) {
+    input_y = LINES - 3;
+  }
+  *input_win = newwin(3, COLS, input_y, 0);
 }
 
 static void draw_status(WINDOW *status_win, const char *status) {
@@ -110,6 +195,283 @@ static void draw_input(WINDOW *input_win, const char *prompt, const char *buffer
   mvwprintw(input_win, 1, 2, "%s %s", prompt, buffer ? buffer : "");
   wmove(input_win, 1, 2 + (int) (prompt ? strlen(prompt) : 0) + (int) (buffer ? strlen(buffer) : 0));
   wrefresh(input_win);
+}
+
+static void draw_output(WINDOW *output_win, const StringBuffer *buffer) {
+  if (!output_win) {
+    return;
+  }
+  werase(output_win);
+  box(output_win, 0, 0);
+  mvwprintw(output_win, 0, 2, "Last Output");
+  int row = 1;
+  int max_rows = getmaxy(output_win) - 1;
+  if (buffer && buffer->data) {
+    const char *cursor = buffer->data;
+    while (*cursor && row < max_rows) {
+      const char *nl = strchr(cursor, '\n');
+      if (!nl) {
+        nl = cursor + strlen(cursor);
+      }
+      int len = (int) (nl - cursor);
+      mvwprintw(output_win, row++, 2, "%.*s", len, cursor);
+      if (*nl == '\0') {
+        break;
+      }
+      cursor = nl + 1;
+    }
+  } else {
+    mvwprintw(output_win, row, 2, "(no output)");
+  }
+  wrefresh(output_win);
+}
+
+static const char *guess_attachment_label(const char *path) {
+  if (!path) {
+    return "attachment";
+  }
+  const char *dot = strrchr(path, '.');
+  if (!dot || *(dot + 1) == '\0') {
+    return "attachment";
+  }
+  const char *ext = dot + 1;
+  if (strcasecmp(ext, "png") == 0 || strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0 ||
+      strcasecmp(ext, "gif") == 0 || strcasecmp(ext, "bmp") == 0 || strcasecmp(ext, "webp") == 0) {
+    return "image";
+  }
+  if (strcasecmp(ext, "pdf") == 0 || strcasecmp(ext, "doc") == 0 || strcasecmp(ext, "docx") == 0 ||
+      strcasecmp(ext, "ppt") == 0 || strcasecmp(ext, "pptx") == 0) {
+    return "document";
+  }
+  if (strcasecmp(ext, "csv") == 0 || strcasecmp(ext, "xls") == 0 || strcasecmp(ext, "xlsx") == 0 ||
+      strcasecmp(ext, "txt") == 0 || strcasecmp(ext, "md") == 0) {
+    return "text";
+  }
+  return "attachment";
+}
+
+static AttachmentKind classify_data(const unsigned char *data, size_t len) {
+  size_t binary = 0;
+  for (size_t i = 0; i < len; ++i) {
+    unsigned char ch = data[i];
+    if (ch == '\n' || ch == '\r' || ch == '\t') {
+      continue;
+    }
+    if (ch < 0x09 || (ch > 0x0D && ch < 0x20) || ch == 0x7F) {
+      binary++;
+    }
+  }
+  if (binary * 5 > len) {
+    return ATTACH_BINARY;
+  }
+  return ATTACH_TEXT;
+}
+
+static char *base64_encode(const unsigned char *data, size_t len) {
+  static const char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  size_t out_len = 4 * ((len + 2) / 3);
+  char *out = malloc(out_len + 1);
+  if (!out) {
+    return NULL;
+  }
+  size_t i = 0, j = 0;
+  while (i < len) {
+    uint32_t octet_a = i < len ? data[i++] : 0;
+    uint32_t octet_b = i < len ? data[i++] : 0;
+    uint32_t octet_c = i < len ? data[i++] : 0;
+    uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+    out[j++] = table[(triple >> 18) & 0x3F];
+    out[j++] = table[(triple >> 12) & 0x3F];
+    out[j++] = (i > len + 1) ? '=' : table[(triple >> 6) & 0x3F];
+    out[j++] = (i > len) ? '=' : table[triple & 0x3F];
+  }
+  out[out_len] = '\0';
+  return out;
+}
+
+static int read_file_bytes(const char *path, unsigned char **out, size_t *len, char *errbuf, size_t errlen) {
+  if (!path || !out || !len) {
+    snprintf(errbuf, errlen, "invalid arguments");
+    return -1;
+  }
+  FILE *fp = fopen(path, "rb");
+  if (!fp) {
+    snprintf(errbuf, errlen, "unable to open %s: %s", path, strerror(errno));
+    return -1;
+  }
+  if (fseek(fp, 0, SEEK_END) != 0) {
+    snprintf(errbuf, errlen, "fseek failed for %s", path);
+    fclose(fp);
+    return -1;
+  }
+  long size = ftell(fp);
+  if (size < 0) {
+    snprintf(errbuf, errlen, "ftell failed for %s", path);
+    fclose(fp);
+    return -1;
+  }
+  rewind(fp);
+  unsigned char *buffer = malloc((size_t) size + 1);
+  if (!buffer) {
+    snprintf(errbuf, errlen, "unable to allocate %ld bytes", size);
+    fclose(fp);
+    return -1;
+  }
+  size_t read_bytes = fread(buffer, 1, (size_t) size, fp);
+  fclose(fp);
+  if (read_bytes != (size_t) size) {
+    snprintf(errbuf, errlen, "short read for %s", path);
+    free(buffer);
+    return -1;
+  }
+  buffer[read_bytes] = '\0';
+  *out = buffer;
+  *len = read_bytes;
+  return 0;
+}
+
+static int attach_file_to_conversation(Conversation *conv, const char *path, char *status_line, size_t status_len) {
+  unsigned char *bytes = NULL;
+  size_t len = 0;
+  char errbuf[128];
+  if (read_file_bytes(path, &bytes, &len, errbuf, sizeof errbuf) != 0) {
+    snprintf(status_line, status_len, "%s", errbuf);
+    return -1;
+  }
+  AttachmentKind kind = classify_data(bytes, len);
+  const char *label = guess_attachment_label(path);
+  StringBuffer payload;
+  sb_init(&payload);
+  sb_append_printf(&payload, "Attachment %s (%s, %zu bytes)\n", path, label, len);
+  if (kind == ATTACH_TEXT) {
+    size_t limit = len > 16384 ? 16384 : len;
+    sb_append(&payload, (const char *) bytes, limit);
+    if (limit < len) {
+      sb_append_str(&payload, "\n... [truncated]\n");
+    }
+  } else {
+    char *encoded = base64_encode(bytes, len);
+    if (!encoded) {
+      free(bytes);
+      sb_clean(&payload);
+      snprintf(status_line, status_len, "base64 encode failed");
+      return -1;
+    }
+    sb_append_str(&payload, "Base64:\n");
+    sb_append_str(&payload, encoded);
+    sb_append_char(&payload, '\n');
+    free(encoded);
+  }
+  conversation_add(conv, "User-Attach", payload.data ? payload.data : "[attachment]");
+  sb_clean(&payload);
+  free(bytes);
+  snprintf(status_line, status_len, "Attached %s", path);
+  return 0;
+}
+
+static void emit_help(Conversation *conv) {
+  conversation_add(conv, "System",
+                   "Slash commands:\n"
+                   "  /help                  Show this message\n"
+                   "  /quit or /exit        Leave the wrapper\n"
+                   "  /attach <path>        Attach a document or image (auto text/base64)\n"
+                   "  /np <n>               Set MPI ranks for future runs\n"
+                   "  /tasks <n>            Request logical task count (auto chunking)\n"
+                   "  /chunk <bytes>        Force chunk size\n"
+                   "  /dry-run on|off       Toggle dry-run mode\n"
+                   "  /clear                Reset the conversation history");
+}
+
+static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *conv, char *status_line,
+                           size_t status_len, bool *should_quit) {
+  if (!line || line[0] != '/') {
+    return false;
+  }
+  char *dup = strdup(line + 1);
+  if (!dup) {
+    snprintf(status_line, status_len, "out of memory");
+    return true;
+  }
+  char *cmd = lstrip(dup);
+  rstrip(cmd);
+  char *space = strchr(cmd, ' ');
+  char *args = NULL;
+  if (space) {
+    *space = '\0';
+    args = lstrip(space + 1);
+  }
+  if (strcasecmp(cmd, "help") == 0) {
+    emit_help(conv);
+    snprintf(status_line, status_len, "Displayed help");
+  } else if (strcasecmp(cmd, "quit") == 0 || strcasecmp(cmd, "exit") == 0) {
+    *should_quit = true;
+    snprintf(status_line, status_len, "Exiting wrapper...");
+  } else if (strcasecmp(cmd, "np") == 0) {
+    if (!args || !*args) {
+      snprintf(status_line, status_len, "Usage: /np <value>");
+    } else {
+      int value = atoi(args);
+      if (value <= 0) {
+        snprintf(status_line, status_len, "Invalid np: %s", args);
+      } else {
+        cfg->np = value;
+        snprintf(status_line, status_len, "MPI ranks set to %d", cfg->np);
+      }
+    }
+  } else if (strcasecmp(cmd, "tasks") == 0) {
+    if (!args || !*args) {
+      snprintf(status_line, status_len, "Usage: /tasks <value>");
+    } else {
+      unsigned long long value = strtoull(args, NULL, 10);
+      if (value == 0) {
+        snprintf(status_line, status_len, "Invalid tasks value: %s", args);
+      } else {
+        cfg->tasks = (size_t) value;
+        cfg->tasks_set = true;
+        snprintf(status_line, status_len, "Tasks set to %zu", cfg->tasks);
+      }
+    }
+  } else if (strcasecmp(cmd, "chunk") == 0) {
+    if (!args || !*args) {
+      snprintf(status_line, status_len, "Usage: /chunk <bytes>");
+    } else {
+      unsigned long long value = strtoull(args, NULL, 10);
+      if (value == 0) {
+        snprintf(status_line, status_len, "Invalid chunk size: %s", args);
+      } else {
+        cfg->chunk_size = (size_t) value;
+        cfg->chunk_size_set = true;
+        snprintf(status_line, status_len, "Chunk size set to %zu bytes", cfg->chunk_size);
+      }
+    }
+  } else if (strcasecmp(cmd, "dry-run") == 0) {
+    if (!args || !*args) {
+      cfg->dry_run = !cfg->dry_run;
+      snprintf(status_line, status_len, "Dry-run toggled %s", cfg->dry_run ? "on" : "off");
+    } else if (strcasecmp(args, "on") == 0) {
+      cfg->dry_run = true;
+      snprintf(status_line, status_len, "Dry-run enabled");
+    } else if (strcasecmp(args, "off") == 0) {
+      cfg->dry_run = false;
+      snprintf(status_line, status_len, "Dry-run disabled");
+    } else {
+      snprintf(status_line, status_len, "Usage: /dry-run [on|off]");
+    }
+  } else if (strcasecmp(cmd, "attach") == 0) {
+    if (!args || !*args) {
+      snprintf(status_line, status_len, "Usage: /attach <path>");
+    } else {
+      attach_file_to_conversation(conv, args, status_line, status_len);
+    }
+  } else if (strcasecmp(cmd, "clear") == 0) {
+    conversation_clear(conv);
+    conversation_add(conv, "System", "Conversation cleared. Start a new session.");
+    snprintf(status_line, status_len, "Conversation cleared");
+  } else {
+    snprintf(status_line, status_len, "Unknown command: /%s", cmd);
+  }
+  free(dup);
+  return true;
 }
 
 static int ensure_response_dir(const char *path, char *errbuf, size_t errlen) {
@@ -217,6 +579,12 @@ static int build_command(const WrapperConfig *cfg, const char *payload_path, cha
     argv[idx++] = "--chunk-size";
     argv[idx++] = chunk_buf;
   }
+  static char tasks_buf[32];
+  if (cfg->tasks_set) {
+    snprintf(tasks_buf, sizeof tasks_buf, "%zu", cfg->tasks);
+    argv[idx++] = "--tasks";
+    argv[idx++] = tasks_buf;
+  }
   if (cfg->dry_run) {
     argv[idx++] = "--dry-run";
   }
@@ -224,7 +592,8 @@ static int build_command(const WrapperConfig *cfg, const char *payload_path, cha
   return 0;
 }
 
-static int run_inference(const WrapperConfig *cfg, Conversation *conv, char *status_buf, size_t status_len) {
+static int run_inference(const WrapperConfig *cfg, Conversation *conv, StringBuffer *last_output, char *status_buf,
+                         size_t status_len) {
   if (!cfg || !conv) {
     snprintf(status_buf, status_len, "internal error: missing cfg");
     return -1;
@@ -256,6 +625,14 @@ static int run_inference(const WrapperConfig *cfg, Conversation *conv, char *sta
   if (response.length == 0) {
     sb_append_str(&response, "(no output)\n");
   }
+  if (last_output) {
+    sb_reset(last_output);
+    size_t limit = response.length > 8192 ? 8192 : response.length;
+    sb_append(last_output, response.data, limit);
+    if (limit < response.length) {
+      sb_append_str(last_output, "\n... [truncated]\n");
+    }
+  }
   conversation_add(conv, "DeepSeek", response.data);
   sb_clean(&response);
   snprintf(status_buf, status_len, "DeepSeek run completed.");
@@ -270,8 +647,10 @@ static void usage(const char *prog) {
           "  --binary PATH         Path to deepseek_mpi binary (default %s)\n"
           "  --response-dir DIR    Directory for chunk responses (default %s)\n"
           "  --chunk-size BYTES    Override chunk size\n"
+          "  --tasks N             Default logical task count (auto chunking)\n"
           "  --dry-run             Pass --dry-run to deepseek_mpi\n"
-          "  --help                Show this message\n",
+          "  --help                Show this message\n"
+          "Slash commands inside the UI: /help, /attach <file>, /np <n>, /tasks <n>, /chunk <bytes>, /dry-run on|off, /clear, /quit\n",
           prog, DEFAULT_BINARY, DEFAULT_RESPONSE_DIR);
 }
 
@@ -282,6 +661,8 @@ static void wrapper_defaults(WrapperConfig *cfg) {
   cfg->chunk_size = 2048;
   cfg->chunk_size_set = false;
   cfg->dry_run = false;
+  cfg->tasks = 0;
+  cfg->tasks_set = false;
 }
 
 int main(int argc, char **argv) {
@@ -292,12 +673,13 @@ int main(int argc, char **argv) {
                                       {"binary", required_argument, NULL, 'b'},
                                       {"response-dir", required_argument, NULL, 'r'},
                                       {"chunk-size", required_argument, NULL, 'c'},
+                                      {"tasks", required_argument, NULL, 'w'},
                                       {"dry-run", no_argument, NULL, 'd'},
                                       {"help", no_argument, NULL, 'h'},
                                       {0, 0, 0, 0}};
 
   int opt;
-  while ((opt = getopt_long(argc, argv, "n:b:r:c:dh", long_opts, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "n:b:r:c:w:dh", long_opts, NULL)) != -1) {
     switch (opt) {
     case 'n':
       cfg.np = atoi(optarg);
@@ -317,6 +699,14 @@ int main(int argc, char **argv) {
     case 'c':
       cfg.chunk_size = (size_t) strtoull(optarg, NULL, 10);
       cfg.chunk_size_set = true;
+      break;
+    case 'w':
+      cfg.tasks = (size_t) strtoull(optarg, NULL, 10);
+      cfg.tasks_set = cfg.tasks > 0;
+      if (!cfg.tasks_set) {
+        fprintf(stderr, "Invalid tasks value: %s\n", optarg);
+        return EXIT_FAILURE;
+      }
       break;
     case 'd':
       cfg.dry_run = true;
@@ -342,24 +732,27 @@ int main(int argc, char **argv) {
   keypad(stdscr, TRUE);
   curs_set(1);
 
-  int height = LINES - 6;
-  WINDOW *conversation_outer = newwin(height, COLS, 0, 0);
-  WINDOW *conversation_inner = derwin(conversation_outer, height - 2, COLS - 2, 1, 1);
-  scrollok(conversation_inner, TRUE);
-
-  WINDOW *status_win = newwin(3, COLS, height, 0);
-  WINDOW *input_win = newwin(3, COLS, height + 3, 0);
+  WINDOW *conversation_outer = NULL;
+  WINDOW *conversation_inner = NULL;
+  WINDOW *output_win = NULL;
+  WINDOW *status_win = NULL;
+  WINDOW *input_win = NULL;
+  build_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
 
   Conversation conv = {0};
-  conversation_add(&conv, "System", "Welcome to the DeepSeek wrapper. Describe your intent and press Enter.");
+  conversation_add(&conv, "System",
+                   "Welcome to the DeepSeek wrapper. Type prompts to run inference or use /help for meta-commands.");
 
   char status_line[256] = "Ready.";
   StringBuffer current_input;
   sb_init(&current_input);
+  StringBuffer last_output;
+  sb_init(&last_output);
 
   bool running = true;
   while (running) {
     draw_conversation(conversation_outer, conversation_inner, &conv);
+    draw_output(output_win, &last_output);
     draw_status(status_win, status_line);
     draw_input(input_win, "You>", current_input.data ? current_input.data : "");
 
@@ -368,32 +761,31 @@ int main(int argc, char **argv) {
       continue;
     }
     if (ch == KEY_RESIZE) {
-      height = LINES - 6;
-      delwin(conversation_inner);
-      delwin(conversation_outer);
-      delwin(status_win);
-      delwin(input_win);
-
-      conversation_outer = newwin(height, COLS, 0, 0);
-      conversation_inner = derwin(conversation_outer, height - 2, COLS - 2, 1, 1);
-      scrollok(conversation_inner, TRUE);
-      status_win = newwin(3, COLS, height, 0);
-      input_win = newwin(3, COLS, height + 3, 0);
+      build_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
       continue;
     }
     if (ch == '\n') {
       const char *line = current_input.data ? current_input.data : "";
+      bool should_quit = false;
+      if (line[0] == '/') {
+        handle_command(line, &cfg, &conv, status_line, sizeof status_line, &should_quit);
+        sb_reset(&current_input);
+        if (should_quit) {
+          running = false;
+        }
+        continue;
+      }
       if (strcmp(line, ":quit") == 0) {
         running = false;
       } else if (strlen(line) == 0) {
-        snprintf(status_line, sizeof status_line, "Please enter a prompt or :quit.");
+        snprintf(status_line, sizeof status_line, "Please enter a prompt or /help.");
       } else {
         conversation_add(&conv, "User", line);
         sb_reset(&current_input);
         snprintf(status_line, sizeof status_line, "Running DeepSeek...");
         draw_status(status_win, status_line);
         wrefresh(status_win);
-        run_inference(&cfg, &conv, status_line, sizeof status_line);
+        run_inference(&cfg, &conv, &last_output, status_line, sizeof status_line);
       }
       sb_reset(&current_input);
       continue;
@@ -414,8 +806,10 @@ int main(int argc, char **argv) {
   }
 
   endwin();
+  destroy_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
   conversation_free(&conv);
   sb_clean(&current_input);
+  sb_clean(&last_output);
   free(cfg.binary_path);
   free(cfg.response_dir);
   return EXIT_SUCCESS;
