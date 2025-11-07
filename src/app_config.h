@@ -18,6 +18,8 @@ typedef struct {
   char *input_text;
   char *config_file;
   char *response_dir;
+  size_t target_tasks;
+  bool target_tasks_set;
 
   size_t chunk_size;
   size_t max_request_bytes;

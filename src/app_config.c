@@ -26,6 +26,8 @@ ProgramConfig config_defaults(void) {
   cfg.input_text = NULL;
   cfg.config_file = NULL;
   cfg.response_dir = NULL;
+  cfg.target_tasks = 0;
+  cfg.target_tasks_set = false;
 
   cfg.chunk_size = DEEPSEEK_DEFAULT_CHUNK_SIZE;
   cfg.max_request_bytes = DEEPSEEK_DEFAULT_MAX_REQUEST;
@@ -83,4 +85,6 @@ void config_free(ProgramConfig *config) {
   config->input_text = NULL;
   config->config_file = NULL;
   config->response_dir = NULL;
+  config->target_tasks = 0;
+  config->target_tasks_set = false;
 }

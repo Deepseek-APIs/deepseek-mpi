@@ -27,6 +27,8 @@ typedef struct {
   size_t length;
 } Payload;
 
+static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *payload, Logger *logger);
+
 static void assign_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
     return;
@@ -118,6 +120,7 @@ static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *p
   }
 
   logger_log(logger, LOG_LEVEL_INFO, "Captured %zu bytes of payload", payload->length);
+  maybe_adjust_chunk_from_tasks(config, payload, logger);
   return 0;
 }
 
@@ -133,6 +136,33 @@ static int broadcast_payload(char *buffer, size_t length) {
     offset += (size_t) chunk;
   }
   return 0;
+}
+
+static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *payload, Logger *logger) {
+  if (!config || !payload || !logger) {
+    return;
+  }
+  if (!config->target_tasks_set || config->target_tasks == 0 || payload->length == 0) {
+    return;
+  }
+  size_t tasks = config->target_tasks;
+  size_t chunk = payload->length / tasks;
+  if (payload->length % tasks != 0) {
+    chunk += 1;
+  }
+  if (chunk < DEEPSEEK_MIN_CHUNK_SIZE) {
+    chunk = DEEPSEEK_MIN_CHUNK_SIZE;
+  }
+  if (chunk > payload->length) {
+    chunk = payload->length;
+  }
+  config->chunk_size = chunk;
+  if (config->max_request_bytes < chunk) {
+    config->max_request_bytes = chunk;
+  }
+  logger_log(logger, LOG_LEVEL_INFO,
+             "Auto chunking %zu-byte payload into %zu tasks (chunk size %zu bytes)", payload->length,
+             tasks, chunk);
 }
 
 static int ensure_directory(const char *path) {
@@ -329,6 +359,14 @@ int main(int argc, char **argv) {
     MPI_Finalize();
     return EXIT_FAILURE;
   }
+
+  unsigned long long chunk_size64 = (unsigned long long) config.chunk_size;
+  MPI_Bcast(&chunk_size64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+  config.chunk_size = (size_t) chunk_size64;
+
+  unsigned long long max_req64 = (unsigned long long) config.max_request_bytes;
+  MPI_Bcast(&max_req64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+  config.max_request_bytes = (size_t) max_req64;
 
   uint64_t payload_len64 = rank == 0 ? (uint64_t) payload.length : 0;
   MPI_Bcast(&payload_len64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);

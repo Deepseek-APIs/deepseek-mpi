@@ -61,6 +61,7 @@ open doc/html/index.html
 - `--dry-run` skips HTTP calls but keeps MPI plumbing and logging
 - `--response-dir responses/` streams each chunk response into timestamp-free JSON files per rank
 - `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
+- `--tasks 16` divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
 
 Combine options freely; every flag is also available from a simple key/value config file via `--config my.conf` with entries such as `chunk_size=2048` or `api_endpoint=https://api.deepseek.com/...`.
 
@@ -69,6 +70,7 @@ Combine options freely; every flag is also available from a simple key/value con
 - Rank 0 hosts the TUI; non-root ranks wait for the broadcast payload.
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
+- `--tasks` ensures the entire file (including large spreadsheets) is read once and then auto-sliced, so you’re never limited by the number of hardware threads on the box.
 - Use the `deepseek_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
 - Use git for change tracking – a clean history keeps regressions easy to spot.
 - When you need a guided UX, run `./src/deepseek_wrapper --np 4 --binary ./src/deepseek_mpi`. Every time you hit Enter the wrapper gathers the ongoing conversation, writes a payload file, and invokes `mpirun` with the requested rank count. Type `:quit` or press `Esc` to exit.

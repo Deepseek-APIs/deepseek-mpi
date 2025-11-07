@@ -20,7 +20,8 @@ enum {
   OPT_HIDE_PROGRESS,
   OPT_API_KEY_VALUE,
   OPT_VERSION,
-  OPT_RESPONSE_DIR
+  OPT_RESPONSE_DIR,
+  OPT_TASKS
 };
 
 static void print_version(void) {
@@ -41,6 +42,7 @@ static void print_help(const char *prog) {
        "  --config FILE              Load key=value defaults from file\n"
        "  --log-file PATH            Redirect log output\n"
        "  --response-dir DIR         Persist each chunk response as JSON\n"
+       "  --tasks N                  Desired task count (auto chunking across MPI ranks)\n"
        "  --timeout SECONDS          HTTP timeout\n"
        "  --max-retries N            Retry count per chunk\n"
        "  --retry-delay-ms MS        Delay between retries in milliseconds\n"
@@ -150,6 +152,12 @@ static int load_config_file(ProgramConfig *cfg, const char *path) {
           cfg->dry_run = (strcmp(value, "0") != 0 && strcasecmp(value, "false") != 0);
         } else if (strcmp(key, "response_dir") == 0) {
           config_replace_string(&cfg->response_dir, value);
+        } else if (strcmp(key, "tasks") == 0) {
+          size_t tmp;
+          if (parse_size(value, &tmp) == 0 && tmp > 0) {
+            cfg->target_tasks = tmp;
+            cfg->target_tasks_set = true;
+          }
         }
       }
     }
@@ -203,6 +211,7 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"config", required_argument, NULL, OPT_CONFIG_FILE},
       {"inline-text", required_argument, NULL, 'T'},
       {"response-dir", required_argument, NULL, OPT_RESPONSE_DIR},
+      {"tasks", required_argument, NULL, OPT_TASKS},
       {"stdin", no_argument, NULL, 'S'},
       {"tui", no_argument, NULL, OPT_TUI},
       {"no-tui", no_argument, NULL, OPT_NO_TUI},
@@ -282,6 +291,16 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
     case OPT_RESPONSE_DIR:
       config_replace_string(&config->response_dir, optarg);
       break;
+    case OPT_TASKS: {
+      size_t value;
+      if (parse_size(optarg, &value) != 0 || value == 0) {
+        fprintf(stderr, "Invalid task count: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config->target_tasks = value;
+      config->target_tasks_set = true;
+      break;
+    }
     case 'S':
       config->use_stdin = true;
       break;
