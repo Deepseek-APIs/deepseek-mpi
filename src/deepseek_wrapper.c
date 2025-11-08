@@ -1058,6 +1058,10 @@ int main(int argc, char **argv) {
         draw_status(status_win, status_line);
         wrefresh(status_win);
         run_inference(&cfg, &conv, &history, &scroll_offset, &last_output, status_line, sizeof status_line);
+        draw_conversation(conversation_outer, conversation_inner, &history, scroll_offset);
+        draw_output(output_win, &last_output);
+        draw_status(status_win, status_line);
+        draw_input(input_win, "DeepSeek MPI>", current_input.data ? current_input.data : "");
       }
       sb_reset(&current_input);
       continue;
