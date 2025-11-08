@@ -70,7 +70,7 @@ mpirun -np 4 ./src/deepseek_mpi \
 
 Common flag combos:
 
-- Switch providers: `--api-provider openai --model gpt-4o-mini`, `--api-provider anthropic --anthropic-version 2023-06-01`, or `--api-provider zai --model glm-4-plus`.
+- Switch providers: `--api-provider openai --model gpt-4o-mini`, `--api-provider anthropic --anthropic-version 2023-06-01`, or `--api-provider zai --model glm-4-plus`. DeepSeek’s own endpoint (`https://api.deepseek.com/chat/completions`) is OpenAI-compatible, so the default provider works as soon as you export `DEEPSEEK_API_KEY`.
 - Run from stdin: `cat payload.txt | mpirun -np 4 ./src/deepseek_mpi --stdin`.
 - Non-interactive batching: `--input-file payload.txt --no-tui --show-progress`.
 - Interactive CLI without ncurses: `--no-tui --readline`.

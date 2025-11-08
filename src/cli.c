@@ -36,7 +36,8 @@ enum {
   OPT_AUTOSCALE_THRESHOLD,
   OPT_AUTOSCALE_FACTOR,
   OPT_TUI_LOG_VIEW_ON,
-  OPT_TUI_LOG_VIEW_OFF
+  OPT_TUI_LOG_VIEW_OFF,
+  OPT_REPL
 };
 
 static void print_version(void) {
@@ -72,6 +73,7 @@ static void print_help(const char *prog) {
        "  --retry-delay-ms MS        Delay between retries in milliseconds\n"
        "  --network-retries N        MPI-level client resets after network failures\n"
        "  --readline / --no-readline  Toggle GNU Readline prompt when TUI is disabled\n"
+       "  --repl                    Keep an interactive REPL session inside deepseek_mpi\n"
        "  --tui-log-view / --no-tui-log-view  Show MPI logs in a curses pane after prompt capture\n"
        "  --tui / --no-tui           Toggle ncurses interface\n"
        "  --dry-run                  Skip HTTP calls (for smoke tests)\n"
@@ -224,6 +226,7 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"stdin", no_argument, NULL, 'S'},
       {"readline", no_argument, NULL, OPT_READLINE_ON},
       {"no-readline", no_argument, NULL, OPT_READLINE_OFF},
+      {"repl", no_argument, NULL, OPT_REPL},
       {"tui", no_argument, NULL, OPT_TUI},
       {"no-tui", no_argument, NULL, OPT_NO_TUI},
       {"dry-run", no_argument, NULL, OPT_DRY_RUN},
@@ -353,6 +356,9 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       break;
     case OPT_READLINE_OFF:
       config->use_readline_prompt = false;
+      break;
+    case OPT_REPL:
+      config->repl_mode = true;
       break;
     case OPT_AUTOSCALE_MODE: {
       AutoScaleMode mode;

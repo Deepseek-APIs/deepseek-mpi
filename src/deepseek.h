@@ -6,7 +6,7 @@
  * @brief Global constants shared across the DeepSeek MPI client.
  */
 
-#define DEEPSEEK_DEFAULT_ENDPOINT        "https://api.deepseek.com/v1/process"
+#define DEEPSEEK_DEFAULT_ENDPOINT        "https://api.deepseek.com/chat/completions"
 #define DEEPSEEK_DEFAULT_CHUNK_SIZE      2048ULL
 #define DEEPSEEK_MIN_CHUNK_SIZE          128ULL
 #define DEEPSEEK_DEFAULT_MAX_REQUEST     16384ULL
@@ -17,6 +17,7 @@
 #define DEEPSEEK_DEFAULT_LOG_FILE        "deepseek_mpi.log"
 #define DEEPSEEK_DEFAULT_RESPONSE_DIR    "responses"
 #define DEEPSEEK_DEFAULT_API_ENV         "DEEPSEEK_API_KEY"
+#define DEEPSEEK_DEFAULT_MODEL           "deepseek-chat"
 
 #define OPENAI_DEFAULT_ENDPOINT          "https://api.openai.com/v1/chat/completions"
 #define OPENAI_DEFAULT_MODEL             "gpt-4o-mini"

@@ -114,10 +114,17 @@ static char *json_escape(const char *text, size_t len) {
   return escaped;
 }
 
-static char *build_payload_deepseek(const char *chunk, size_t chunk_len, size_t chunk_index) {
+static const char *resolve_model(const ProgramConfig *config, ApiProvider provider);
+static int resolve_max_tokens(const ProgramConfig *config);
+
+static char *build_payload_deepseek(const ProgramConfig *config, const char *chunk, size_t chunk_len) {
+  const char *model = resolve_model(config, API_PROVIDER_DEEPSEEK);
+  int max_tokens = resolve_max_tokens(config);
   StringBuffer buffer;
   sb_init(&buffer);
-  sb_append_printf(&buffer, "{\"chunk_index\":%zu,\"payload\":\"", chunk_index);
+  sb_append_str(&buffer, "{\"model\":\"");
+  sb_append_str(&buffer, model);
+  sb_append_str(&buffer, "\",\"messages\":[{\"role\":\"system\",\"content\":\"You are a helpful assistant.\"},{\"role\":\"user\",\"content\":\"");
   char *escaped = json_escape(chunk, chunk_len);
   if (!escaped) {
     sb_clean(&buffer);
@@ -125,7 +132,11 @@ static char *build_payload_deepseek(const char *chunk, size_t chunk_len, size_t 
   }
   sb_append_str(&buffer, escaped);
   free(escaped);
-  sb_append_str(&buffer, "\"}");
+  sb_append_str(&buffer, "\"}],\"stream\":false");
+  if (max_tokens > 0) {
+    sb_append_printf(&buffer, ",\"max_tokens\":%d", max_tokens);
+  }
+  sb_append_char(&buffer, '}');
   return sb_detach(&buffer);
 }
 
@@ -138,6 +149,8 @@ static const char *resolve_model(const ProgramConfig *config, ApiProvider provid
     return OPENAI_DEFAULT_MODEL;
   case API_PROVIDER_ANTHROPIC:
     return ANTHROPIC_DEFAULT_MODEL;
+  case API_PROVIDER_DEEPSEEK:
+    return DEEPSEEK_DEFAULT_MODEL;
   case API_PROVIDER_ZAI:
     return ZAI_DEFAULT_MODEL;
   default:
@@ -213,7 +226,8 @@ static char *build_payload_for_provider(const ProgramConfig *config, const char 
     return build_payload_openai_style(config, chunk, chunk_len, API_PROVIDER_ZAI);
   case API_PROVIDER_DEEPSEEK:
   default:
-    return build_payload_deepseek(chunk, chunk_len, chunk_index);
+    (void) chunk_index;
+    return build_payload_deepseek(config, chunk, chunk_len);
   }
 }
 

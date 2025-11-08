@@ -56,6 +56,7 @@ typedef struct {
   bool allow_file_prompt;
   bool use_stdin;
   bool force_quiet;
+  bool repl_mode;
 
   int rank;
   int world_size;

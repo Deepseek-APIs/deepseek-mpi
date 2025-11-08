@@ -1,6 +1,7 @@
 #include <mpi.h>
 
 #include <errno.h>
+#include <ctype.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -409,8 +410,53 @@ static void log_response_preview(const ProgramConfig *config, Logger *logger, si
   }
 }
 
+static bool repl_should_exit(const char *text, size_t len) {
+  if (!text) {
+    return true;
+  }
+  while (len > 0 && isspace((unsigned char) text[len - 1])) {
+    len--;
+  }
+  size_t start = 0;
+  while (start < len && isspace((unsigned char) text[start])) {
+    start++;
+  }
+  size_t trimmed_len = len > start ? len - start : 0;
+  if (trimmed_len == 0) {
+    return true;
+  }
+  const char *trimmed = text + start;
+  if ((trimmed_len == 5 && strncasecmp(trimmed, ":quit", 5) == 0) ||
+      (trimmed_len == 4 && strncasecmp(trimmed, ":exit", 5) == 0) ||
+      (trimmed_len == 2 && strncasecmp(trimmed, ":q", 2) == 0)) {
+    return true;
+  }
+  return false;
+}
+
+static void build_repl_payload(const StringBuffer *history, const Payload *prompt, size_t turn, Payload *out) {
+  if (!out) {
+    return;
+  }
+  StringBuffer builder;
+  sb_init(&builder);
+  if (history && history->data && history->length > 0) {
+    sb_append(&builder, history->data, history->length);
+    sb_append_str(&builder, "\n");
+  }
+  sb_append_printf(&builder, "User #%zu:\n", turn);
+  if (prompt && prompt->data && prompt->length > 0) {
+    sb_append(&builder, prompt->data, prompt->length);
+  }
+  sb_append_str(&builder, "\n");
+  out->length = builder.length;
+  out->data = sb_detach(&builder);
+  sb_clean(&builder);
+}
+
 static void stream_responses_after_completion(const ProgramConfig *config, Logger *logger,
-                                              StringBuffer *response_stream, bool stream_enabled) {
+                                              StringBuffer *response_stream, StringBuffer *global_out,
+                                              bool stream_enabled) {
   if (!stream_enabled || !config || !logger || !response_stream) {
     return;
   }
@@ -430,6 +476,9 @@ static void stream_responses_after_completion(const ProgramConfig *config, Logge
     if (local_len > 0 && response_stream->data) {
       logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses from rank 0 =====\n%.*s",
                  (int) response_stream->length, response_stream->data);
+      if (global_out) {
+        sb_append(global_out, response_stream->data, response_stream->length);
+      }
     }
     for (int source = 1; source < config->world_size; ++source) {
       unsigned long long incoming = 0;
@@ -458,6 +507,9 @@ static void stream_responses_after_completion(const ProgramConfig *config, Logge
       }
       buffer[incoming] = '\0';
       logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses from rank %d =====\n%s", source, buffer);
+      if (global_out) {
+        sb_append(global_out, buffer, strlen(buffer));
+      }
       free(buffer);
     }
   } else {
@@ -471,7 +523,8 @@ static void stream_responses_after_completion(const ProgramConfig *config, Logge
   }
 }
 
-static void process_chunks(const ProgramConfig *config, Logger *logger, const Payload *payload) {
+static void process_chunks(const ProgramConfig *config, Logger *logger, const Payload *payload,
+                           StringBuffer *repl_capture) {
   if (!config || !payload) {
     return;
   }
@@ -493,8 +546,8 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
     response_ready = true;
   }
 
+  bool stream_enabled = response_ready && config && config->repl_mode;
   StringBuffer response_stream;
-  bool stream_enabled = response_ready;
   if (stream_enabled) {
     sb_init(&response_stream);
   }
@@ -525,11 +578,13 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
         if (response_ready) {
           persist_response_to_disk(config, logger, chunk_index, &response);
           log_response_preview(config, logger, chunk_index, &response);
-          sb_append_printf(&response_stream, "----- chunk %zu (rank %d) -----\n", chunk_index, config->rank);
-          if (response.length > 0 && response.data) {
-            sb_append(&response_stream, response.data, response.length);
+          if (stream_enabled) {
+            sb_append_printf(&response_stream, "----- chunk %zu (rank %d) -----\n", chunk_index, config->rank);
+            if (response.length > 0 && response.data) {
+              sb_append(&response_stream, response.data, response.length);
+            }
+            sb_append_str(&response_stream, "\n\n");
           }
-          sb_append_str(&response_stream, "\n\n");
         }
         chunk_done = true;
         free(error);
@@ -595,12 +650,149 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
     sb_clean(&response);
   }
   if (stream_enabled) {
-    stream_responses_after_completion(config, logger, &response_stream, stream_enabled);
+    stream_responses_after_completion(config, logger, &response_stream, repl_capture, stream_enabled);
     sb_clean(&response_stream);
+  } else if (repl_capture && config && config->rank == 0) {
+    sb_reset(repl_capture);
   }
   if (client_ready) {
     api_client_cleanup(&client);
   }
+}
+
+static int execute_payload(ProgramConfig *config, Logger *logger, Payload *payload,
+                           StringBuffer *repl_capture) {
+  if (!config || !logger || !payload) {
+    return -1;
+  }
+  int ready = 0;
+  if (config->rank == 0 && payload->data && payload->length > 0) {
+    ready = 1;
+  }
+  MPI_Bcast(&ready, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  if (!ready) {
+    if (config->rank == 0 && payload->data) {
+      free(payload->data);
+      payload->data = NULL;
+      payload->length = 0;
+    }
+    return -1;
+  }
+
+  unsigned long long chunk_size64 = (unsigned long long) config->chunk_size;
+  MPI_Bcast(&chunk_size64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+  config->chunk_size = (size_t) chunk_size64;
+
+  unsigned long long max_req64 = (unsigned long long) config->max_request_bytes;
+  MPI_Bcast(&max_req64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+  config->max_request_bytes = (size_t) max_req64;
+
+  unsigned long long payload_len64 = config->rank == 0 ? (unsigned long long) payload->length : 0ULL;
+  MPI_Bcast(&payload_len64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+  size_t payload_len = (size_t) payload_len64;
+
+  char *shared_buffer = NULL;
+  if (config->rank == 0) {
+    shared_buffer = payload->data;
+  } else {
+    shared_buffer = malloc(payload_len + 1);
+    if (!shared_buffer) {
+      logger_log(logger, LOG_LEVEL_ERROR, "Rank %d cannot allocate %zu bytes for payload", config->rank,
+                 payload_len);
+      return -1;
+    }
+  }
+
+  if (payload_len > 0) {
+    if (config->rank != 0) {
+      memset(shared_buffer, 0, payload_len + 1);
+    }
+    broadcast_payload(shared_buffer, payload_len);
+    shared_buffer[payload_len] = '\0';
+  }
+
+  Payload shared_payload = {shared_buffer, payload_len};
+  process_chunks(config, logger, &shared_payload, repl_capture);
+
+  if (config->rank == 0) {
+    free(payload->data);
+    payload->data = NULL;
+    payload->length = 0;
+  } else {
+    free(shared_buffer);
+  }
+  return 0;
+}
+
+static int run_repl_session(ProgramConfig *config, Logger *logger) {
+  if (!config || !logger) {
+    return -1;
+  }
+  StringBuffer history;
+  sb_init(&history);
+  size_t turn = 1;
+  int running = 1;
+  while (running) {
+    Payload prompt = {0};
+    int ready = 0;
+    if (config->rank == 0) {
+      if (gather_payload_root(config, logger, &prompt) == 0) {
+        ready = 1;
+        if (repl_should_exit(prompt.data, prompt.length)) {
+          running = 0;
+        }
+      } else {
+        ready = 0;
+      }
+    }
+
+    MPI_Bcast(&running, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (!running) {
+      if (prompt.data) {
+        free(prompt.data);
+      }
+      break;
+    }
+
+    int ready_flag = ready;
+    MPI_Bcast(&ready_flag, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (!ready_flag) {
+      if (prompt.data) {
+        free(prompt.data);
+      }
+      continue;
+    }
+
+    Payload composite = {0};
+    if (config->rank == 0) {
+      build_repl_payload(&history, &prompt, turn, &composite);
+    }
+
+    StringBuffer repl_response;
+    if (config->rank == 0) {
+      sb_init(&repl_response);
+    }
+    execute_payload(config, logger, &composite, config->rank == 0 ? &repl_response : NULL);
+
+    if (config->rank == 0) {
+      sb_append_printf(&history, "User #%zu:\n%.*s\n", turn,
+                       (int) (prompt.length), prompt.data ? prompt.data : "");
+      if (repl_response.length > 0 && repl_response.data) {
+        sb_append_printf(&history, "Assistant #%zu:\n%.*s\n\n", turn,
+                         (int) repl_response.length, repl_response.data);
+      } else {
+        sb_append_printf(&history, "Assistant #%zu:\n(no response)\n\n", turn);
+      }
+      sb_clean(&repl_response);
+    }
+
+    if (prompt.data) {
+      free(prompt.data);
+    }
+    turn++;
+  }
+  sb_clean(&history);
+  return 0;
 }
 
 int main(int argc, char **argv) {
@@ -643,58 +835,6 @@ int main(int argc, char **argv) {
     logger.mirror_stdout = false;
   }
 
-  Payload payload = {0};
-  int ready = 0;
-  if (rank == 0) {
-    ready = (gather_payload_root(&config, &logger, &payload) == 0) ? 1 : 0;
-  }
-
-  MPI_Bcast(&ready, 1, MPI_INT, 0, MPI_COMM_WORLD);
-  if (!ready) {
-    if (rank == 0 && payload.data) {
-      free(payload.data);
-    }
-    logger_log(&logger, LOG_LEVEL_ERROR, "Aborting because root rank failed to prepare payload");
-    logger_close(&logger);
-    config_free(&config);
-    MPI_Finalize();
-    return EXIT_FAILURE;
-  }
-
-  unsigned long long chunk_size64 = (unsigned long long) config.chunk_size;
-  MPI_Bcast(&chunk_size64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
-  config.chunk_size = (size_t) chunk_size64;
-
-  unsigned long long max_req64 = (unsigned long long) config.max_request_bytes;
-  MPI_Bcast(&max_req64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
-  config.max_request_bytes = (size_t) max_req64;
-
-  uint64_t payload_len64 = rank == 0 ? (uint64_t) payload.length : 0;
-  MPI_Bcast(&payload_len64, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
-  size_t payload_len = (size_t) payload_len64;
-  char *shared_buffer = NULL;
-  if (rank == 0) {
-    shared_buffer = payload.data;
-  } else {
-    shared_buffer = malloc(payload_len + 1);
-    if (!shared_buffer) {
-      logger_log(&logger, LOG_LEVEL_ERROR, "Rank %d cannot allocate %zu bytes for payload", rank, payload_len);
-      logger_close(&logger);
-      config_free(&config);
-      MPI_Finalize();
-      return EXIT_FAILURE;
-    }
-  }
-
-  if (payload_len > 0) {
-    if (rank != 0) {
-      memset(shared_buffer, 0, payload_len + 1);
-    }
-    broadcast_payload(shared_buffer, payload_len);
-    shared_buffer[payload_len] = '\0';
-  }
-
-  Payload shared_payload = {shared_buffer, payload_len};
   bool tui_log_active = false;
   if (config.rank == 0 && config.use_tui && config.use_tui_log_view) {
     if (tui_log_view_start() == 0) {
@@ -706,18 +846,30 @@ int main(int argc, char **argv) {
     }
   }
 
-  process_chunks(&config, &logger, &shared_payload);
+  if (config.repl_mode) {
+    run_repl_session(&config, &logger);
+  } else {
+    Payload payload = {0};
+    int ready = 0;
+    if (rank == 0) {
+      ready = (gather_payload_root(&config, &logger, &payload) == 0) ? 1 : 0;
+    }
+    if (ready) {
+      execute_payload(&config, &logger, &payload, NULL);
+    } else {
+      logger_log(&logger, LOG_LEVEL_ERROR, "Aborting because root rank failed to prepare payload");
+      if (payload.data) {
+        free(payload.data);
+        payload.data = NULL;
+        payload.length = 0;
+      }
+    }
+  }
 
   if (tui_log_active) {
     logger_set_sink(&logger, NULL, NULL);
     logger.mirror_stdout = logger_mirror_initial;
     tui_log_view_stop();
-  }
-
-  if (rank == 0) {
-    free(payload.data);
-  } else {
-    free(shared_buffer);
   }
 
   logger_log(&logger, LOG_LEVEL_INFO, "Rank %d complete", rank);

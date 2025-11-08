@@ -66,7 +66,7 @@ open doc/html/index.html
 ```
 
 ## CLI Highlights
-- `--api-endpoint https://api.deepseek.com/v1/process`
+- `--api-endpoint https://api.deepseek.com/chat/completions`
 - `--api-provider openai --model gpt-4o-mini` flips the payload/header layout for OpenAI-compatible JSON APIs (also works with Azure, OpenRouter, etc.).
 - `--api-provider anthropic --model claude-3-5-sonnet-20240620 --anthropic-version 2023-06-01` targets Anthropic’s official Claude endpoints.
 - `--api-provider zai --model glm-4-plus --api-key-env ZAI_API_KEY` talks to z.ai’s GLM APIs (payload schema matches OpenAI chat completions).

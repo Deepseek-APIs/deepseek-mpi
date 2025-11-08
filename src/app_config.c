@@ -254,6 +254,7 @@ ProgramConfig config_defaults(void) {
   cfg.allow_file_prompt = true;
   cfg.use_stdin = false;
   cfg.force_quiet = false;
+  cfg.repl_mode = false;
 
   cfg.rank = 0;
   cfg.world_size = 1;
@@ -314,6 +315,7 @@ void config_free(ProgramConfig *config) {
   config->provider = API_PROVIDER_DEEPSEEK;
   config->use_readline_prompt = true;
   config->use_tui_log_view = false;
+  config->repl_mode = false;
   config->auto_scale_mode = AUTOSCALE_MODE_NONE;
   config->auto_scale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
   config->auto_scale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
@@ -402,6 +404,9 @@ static void config_apply_provider(ProgramConfig *config, ApiProvider provider, b
       break;
     case API_PROVIDER_ANTHROPIC:
       config_replace_string(&config->model, ANTHROPIC_DEFAULT_MODEL);
+      break;
+    case API_PROVIDER_DEEPSEEK:
+      config_replace_string(&config->model, DEEPSEEK_DEFAULT_MODEL);
       break;
     case API_PROVIDER_ZAI:
       config_replace_string(&config->model, ZAI_DEFAULT_MODEL);
@@ -579,6 +584,13 @@ int config_apply_kv(ProgramConfig *config, const char *key, const char *value, c
       return -1;
     }
     config->dry_run = flag;
+  } else if (strcmp(key, "repl") == 0 || strcmp(key, "repl_mode") == 0) {
+    bool flag;
+    if (parse_bool_value(val, &flag) != 0) {
+      cfg_assign_error(error_out, "invalid repl flag: %s", val);
+      return -1;
+    }
+    config->repl_mode = flag;
   } else if (strcmp(key, "show_progress") == 0) {
     bool flag;
     if (parse_bool_value(val, &flag) != 0) {
