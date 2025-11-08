@@ -88,7 +88,7 @@ static ApiProvider provider_from_key_prefix(const char *key) {
     return API_PROVIDER_ZAI;
   }
   if (!strncasecmp(key, "sk-aoai-", 8) || !strncasecmp(key, "sk-az-", 6) ||
-      !strncasecmp(key, "sk-", 3)) {
+      strcasestr_bool(key, "openai")) {
     return API_PROVIDER_OPENAI;
   }
   if (strncasecmp(key, "ds-", 3) == 0) {
