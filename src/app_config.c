@@ -234,6 +234,7 @@ ProgramConfig config_defaults(void) {
   cfg.target_tasks = 0;
   cfg.target_tasks_set = false;
   cfg.response_files_enabled = true;
+  cfg.pause_on_exit = true;
 
   cfg.chunk_size = DEEPSEEK_DEFAULT_CHUNK_SIZE;
   cfg.max_request_bytes = DEEPSEEK_DEFAULT_MAX_REQUEST;
@@ -303,6 +304,7 @@ void config_free(ProgramConfig *config) {
   config->config_file = NULL;
   config->response_dir = NULL;
   config->response_files_enabled = true;
+  config->pause_on_exit = true;
   config->model = NULL;
   config->anthropic_version = NULL;
   config->target_tasks = 0;
@@ -479,6 +481,13 @@ int config_apply_kv(ProgramConfig *config, const char *key, const char *value, c
       return -1;
     }
     config->response_files_enabled = enabled;
+  } else if (strcmp(key, "pause_on_exit") == 0) {
+    bool enabled;
+    if (parse_bool_value(val, &enabled) != 0) {
+      cfg_assign_error(error_out, "invalid pause_on_exit value: %s", val);
+      return -1;
+    }
+    config->pause_on_exit = enabled;
   } else if (strcmp(key, "model") == 0) {
     config_replace_string(&config->model, val);
   } else if (strcmp(key, "anthropic_version") == 0) {

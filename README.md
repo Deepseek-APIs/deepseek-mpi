@@ -83,6 +83,7 @@ open doc/html/index.html
 - `--dry-run` skips HTTP calls but keeps MPI plumbing and logging
 - `--response-dir responses/` streams each chunk response into timestamp-free JSON files per rank
 - `--response-files / --no-response-files` toggle per-rank response files (default enabled with directory `responses/`)
+- `--wait-exit / --no-wait-exit` pause on completion so you can read the MPI logs before the ranks tear down (default on when attached to a TTY)
 - `--readline / --no-readline` choose between GNU Readline prompts or plain stdin when the ncurses TUI is disabled
 - `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
 - `--tasks 16` divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
@@ -99,6 +100,7 @@ Combine options freely; every flag is also available from a simple key/value con
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
 - Response files are enabled by default (saved under `responses/` per rank/chunk). Disable with `--no-response-files` if you only want log output.
+- Rank 0 pauses at the end of a run (when attached to a TTY) until you press Enter so you can review the per-rank logs. Disable with `--no-wait-exit` for automated pipelines.
 - `--tasks` ensures the entire file (including large spreadsheets) is read once and then auto-sliced, so you’re never limited by the number of hardware threads on the box.
 - Autoscaling keeps big drops moving: chunk mode divides payloads across existing ranks, while wrapper `--auto-scale-mode threads` multiplies the MPI rank count on the fly when a prompt crosses your size threshold.
 - Provider detection is automatic: endpoints, environment variable names, and well-known key prefixes (Anthropic `sk-ant-`, GLM `gk-`/`glm-`, Azure OpenAI `sk-aoai-`/`sk-az-`, etc.) steer the client toward the right REST API. Explicitly set `--api-provider` if you need to override the heuristic.

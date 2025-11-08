@@ -198,6 +198,7 @@ static void build_windows(WINDOW **conv_outer, WINDOW **conv_inner, WINDOW **out
     input_y = LINES - 3;
   }
   *input_win = newwin(3, COLS, input_y, 0);
+  keypad(*input_win, TRUE);
 }
 
 static void draw_status(WINDOW *status_win, const char *status) {
@@ -861,6 +862,9 @@ int main(int argc, char **argv) {
     }
     if (ch == KEY_RESIZE) {
       build_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
+      continue;
+    }
+    if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN) {
       continue;
     }
     if (ch == '\n') {

@@ -36,6 +36,7 @@ typedef struct {
   size_t target_tasks;
   bool target_tasks_set;
   bool response_files_enabled;
+  bool pause_on_exit;
 
   size_t chunk_size;
   size_t max_request_bytes;

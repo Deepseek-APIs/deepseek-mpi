@@ -283,6 +283,31 @@ static void persist_response_to_disk(const ProgramConfig *config, Logger *logger
   free(path);
 }
 
+static void pause_before_exit(const ProgramConfig *config, Logger *logger) {
+  if (!config || !logger) {
+    return;
+  }
+  if (!config->pause_on_exit) {
+    return;
+  }
+  FILE *stream = NULL;
+  if (isatty(STDIN_FILENO)) {
+    stream = stdin;
+  } else {
+    stream = fopen("/dev/tty", "r");
+  }
+  if (!stream) {
+    return;
+  }
+  logger_log(logger, LOG_LEVEL_INFO, "Press Enter to exit...");
+  int ch;
+  while ((ch = fgetc(stream)) != '\n' && ch != EOF) {
+  }
+  if (stream != stdin) {
+    fclose(stream);
+  }
+}
+
 static void log_response_preview(const ProgramConfig *config, Logger *logger, size_t chunk_index,
                                  const StringBuffer *response) {
   (void) config;
@@ -615,6 +640,9 @@ int main(int argc, char **argv) {
   }
 
   logger_log(&logger, LOG_LEVEL_INFO, "Rank %d complete", rank);
+  if (rank == 0) {
+    pause_before_exit(&config, &logger);
+  }
   logger_close(&logger);
   config_free(&config);
   MPI_Finalize();
