@@ -37,6 +37,9 @@ typedef struct {
   bool target_tasks_set;
   bool response_files_enabled;
   bool pause_on_exit;
+  char *payload_file;
+  char *mpirun_cmd;
+  int mpi_processes;
 
   size_t chunk_size;
   size_t max_request_bytes;

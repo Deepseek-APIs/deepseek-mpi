@@ -107,6 +107,7 @@ Combine options freely; every flag is also available from a simple key/value con
 - Autoscaling keeps big drops moving: chunk mode divides payloads across existing ranks, while wrapper `--auto-scale-mode threads` multiplies the MPI rank count on the fly when a prompt crosses your size threshold.
 - Provider detection is automatic: endpoints, environment variable names, and well-known key prefixes (Anthropic `sk-ant-`, GLM `gk-`/`glm-`, Azure OpenAI `sk-aoai-`/`sk-az-`, etc.) steer the client toward the right REST API. Explicitly set `--api-provider` if you need to override the heuristic.
 - Inside the ncurses TUI, use `:set key=value`, `:show-config`, or `:config-help` to tweak runtime settings (endpoints, chunk sizes, providers, etc.) before launching the MPI job.
+- The wrapper keeps a 500-line scrollback buffer; use Page Up/Down (or Home/End) to browse prior output without leaving the TUI.
 - Add `--tui-log-view` if you prefer the classic post-prompt ncurses pane that streams MPI logs; otherwise logs print below the prompt once the TUI input closes.
 - Use the `deepseek_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
 - Use git for change tracking – a clean history keeps regressions easy to spot.

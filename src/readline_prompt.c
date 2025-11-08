@@ -38,6 +38,16 @@ static void rl_set_error(char **error_out, const char *fmt, ...) {
   *error_out = msg;
 }
 
+static void print_readline_banner(void) {
+  fprintf(stdout,
+          "\nDeepSeek MPI Readline Mode\n"
+          "------------------------------------\n"
+          "- Type your prompt; finish with a single '.' on its own line.\n"
+          "- Use Ctrl+D to abort, or Ctrl+C to clear the current line.\n"
+          "- Preload files with --input-file or by running the TUI.\n\n");
+  fflush(stdout);
+}
+
 int readline_capture_payload(ProgramConfig *config, char **output, size_t *output_len, char **error_out) {
   (void) config;
   if (!output || !output_len) {
@@ -45,11 +55,9 @@ int readline_capture_payload(ProgramConfig *config, char **output, size_t *outpu
     return -1;
   }
 
-  if (isatty(STDIN_FILENO)) {
-    puts("Enter the payload below. Finish with a single '.' on its own line.");
-    puts("History/editing provided by GNU Readline; use Ctrl+D to cancel.");
-    fflush(stdout);
-  }
+  print_readline_banner();
+
+  rl_catch_signals = 0;
 
   StringBuffer buffer;
   sb_init(&buffer);

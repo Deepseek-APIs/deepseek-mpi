@@ -15,6 +15,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 #include "deepseek.h"
 #include "string_buffer.h"
 #include "attachment_loader.h"
@@ -34,6 +38,13 @@ typedef struct {
   size_t count;
   size_t capacity;
 } Conversation;
+
+#define WRAPPER_SCROLLBACK_MAX_LINES 500
+
+typedef struct {
+  char *lines[WRAPPER_SCROLLBACK_MAX_LINES];
+  size_t count;
+} Scrollback;
 
 typedef enum {
   WRAPPER_AUTOSCALE_NONE = 0,
@@ -124,6 +135,81 @@ static void conversation_clear(Conversation *conv) {
   conv->capacity = 0;
 }
 
+static void scrollback_store_line(Scrollback *sb, char *owned) {
+  if (!sb || !owned) {
+    free(owned);
+    return;
+  }
+  if (sb->count == WRAPPER_SCROLLBACK_MAX_LINES) {
+    free(sb->lines[0]);
+    memmove(&sb->lines[0], &sb->lines[1], (WRAPPER_SCROLLBACK_MAX_LINES - 1) * sizeof(char *));
+    sb->count--;
+  }
+  sb->lines[sb->count++] = owned;
+}
+
+static void scrollback_append_line(Scrollback *sb, const char *line) {
+  char *copy = strdup(line ? line : "");
+  if (!copy) {
+    return;
+  }
+  scrollback_store_line(sb, copy);
+}
+
+static void scrollback_add_message(Scrollback *sb, const char *role, const char *text) {
+  if (!sb) {
+    return;
+  }
+  char role_line[64];
+  snprintf(role_line, sizeof role_line, "%s:", role ? role : "Message");
+  scrollback_append_line(sb, role_line);
+  if (text && *text) {
+    const char *cursor = text;
+    while (*cursor) {
+      const char *nl = strchr(cursor, '\n');
+      if (!nl) {
+        scrollback_append_line(sb, cursor);
+        break;
+      }
+      size_t len = (size_t) (nl - cursor);
+      char *segment = malloc(len + 1);
+      if (!segment) {
+        break;
+      }
+      memcpy(segment, cursor, len);
+      segment[len] = '\0';
+      scrollback_store_line(sb, segment);
+      cursor = nl + 1;
+      if (*cursor == '\0') {
+        break;
+      }
+    }
+  } else {
+    scrollback_append_line(sb, "");
+  }
+  scrollback_append_line(sb, "");
+}
+
+static void scrollback_clear(Scrollback *sb) {
+  if (!sb) {
+    return;
+  }
+  for (size_t i = 0; i < sb->count; ++i) {
+    free(sb->lines[i]);
+    sb->lines[i] = NULL;
+  }
+  sb->count = 0;
+}
+
+static void conversation_log(Conversation *conv, Scrollback *sb, size_t *scroll_offset, const char *role,
+                             const char *text) {
+  conversation_add(conv, role, text);
+  scrollback_add_message(sb, role, text);
+  if (scroll_offset && *scroll_offset == 0) {
+    *scroll_offset = 0;
+  }
+}
+
 static char *lstrip(char *text) {
   while (text && *text && isspace((unsigned char) *text)) {
     ++text;
@@ -141,19 +227,28 @@ static void rstrip(char *text) {
   }
 }
 
-static void draw_conversation(WINDOW *outer, WINDOW *inner, const Conversation *conv) {
-  if (!outer || !inner || !conv) {
+static void draw_conversation(WINDOW *outer, WINDOW *inner, const Scrollback *sb, size_t scroll_offset) {
+  if (!outer || !inner || !sb) {
     return;
   }
   werase(outer);
   box(outer, 0, 0);
   werase(inner);
-  wmove(inner, 0, 0);
-  for (size_t i = 0; i < conv->count; ++i) {
-    wattron(inner, A_BOLD);
-    wprintw(inner, "%s:\n", conv->items[i].role);
-    wattroff(inner, A_BOLD);
-    wprintw(inner, "%s\n\n", conv->items[i].text);
+  int inner_height = getmaxy(inner);
+  if (inner_height <= 0) {
+    inner_height = 1;
+  }
+  size_t total = sb->count;
+  size_t visible = (size_t) inner_height;
+  size_t max_scroll = total > visible ? total - visible : 0;
+  if (scroll_offset > max_scroll) {
+    scroll_offset = max_scroll;
+  }
+  size_t start = total > visible + scroll_offset ? total - visible - scroll_offset : 0;
+  size_t end = total > scroll_offset ? total - scroll_offset : total;
+  size_t row = 0;
+  for (size_t i = start; i < end && row < visible; ++i, ++row) {
+    mvwprintw(inner, (int) row, 0, "%s", sb->lines[i] ? sb->lines[i] : "");
   }
   wrefresh(outer);
   wrefresh(inner);
@@ -260,7 +355,8 @@ static void draw_output(WINDOW *output_win, const StringBuffer *buffer) {
   wrefresh(output_win);
 }
 
-static int attach_file_to_conversation(Conversation *conv, const char *path, char *status_line, size_t status_len) {
+static int attach_file_to_conversation(Conversation *conv, Scrollback *history, size_t *scroll_offset,
+                                       const char *path, char *status_line, size_t status_len) {
   AttachmentResult res;
   char *error = NULL;
   if (attachment_format_message(path, &res, &error) != 0) {
@@ -268,15 +364,15 @@ static int attach_file_to_conversation(Conversation *conv, const char *path, cha
     free(error);
     return -1;
   }
-  conversation_add(conv, "Attach@MPI", res.message_text ? res.message_text : "[attachment]");
+  conversation_log(conv, history, scroll_offset, "Attach@MPI", res.message_text ? res.message_text : "[attachment]");
   snprintf(status_line, status_len, "Attached %s (%s) to DeepSeek MPI chat", path,
            res.mime_label ? res.mime_label : "unknown");
   attachment_result_clean(&res);
   return 0;
 }
 
-static void emit_help(Conversation *conv) {
-  conversation_add(conv, "System-MPI",
+static void emit_help(Conversation *conv, Scrollback *history, size_t *scroll_offset) {
+  conversation_log(conv, history, scroll_offset, "System-MPI",
                    "DeepSeek MPI chat commands:\n"
                    "  /help                  Show this message\n"
                    "  /quit or /exit        Leave the wrapper\n"
@@ -288,8 +384,8 @@ static void emit_help(Conversation *conv) {
                    "  /clear                Reset the DeepSeek chat history");
 }
 
-static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *conv, char *status_line,
-                           size_t status_len, bool *should_quit) {
+static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *conv, Scrollback *history,
+                           size_t *scroll_offset, char *status_line, size_t status_len, bool *should_quit) {
   if (!line || line[0] != '/') {
     return false;
   }
@@ -307,7 +403,7 @@ static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *c
     args = lstrip(space + 1);
   }
   if (strcasecmp(cmd, "help") == 0) {
-    emit_help(conv);
+    emit_help(conv, history, scroll_offset);
     snprintf(status_line, status_len, "Displayed DeepSeek MPI help");
   } else if (strcasecmp(cmd, "quit") == 0 || strcasecmp(cmd, "exit") == 0) {
     *should_quit = true;
@@ -367,11 +463,13 @@ static bool handle_command(const char *line, WrapperConfig *cfg, Conversation *c
     if (!args || !*args) {
       snprintf(status_line, status_len, "Usage: /attach <path>");
     } else {
-      attach_file_to_conversation(conv, args, status_line, status_len);
+      attach_file_to_conversation(conv, history, scroll_offset, args, status_line, status_len);
     }
   } else if (strcasecmp(cmd, "clear") == 0) {
     conversation_clear(conv);
-    conversation_add(conv, "System-MPI", "DeepSeek MPI conversation cleared. Start a new session.");
+    scrollback_clear(history);
+    conversation_log(conv, history, scroll_offset, "System-MPI",
+                     "DeepSeek MPI conversation cleared. Start a new session.");
     snprintf(status_line, status_len, "DeepSeek MPI conversation cleared");
   } else {
     snprintf(status_line, status_len, "Unknown DeepSeek MPI command: /%s", cmd);
@@ -420,8 +518,8 @@ static int write_payload_file(const Conversation *conv, char *template_path) {
   return 0;
 }
 
-static bool maybe_autoscale_wrapper(WrapperConfig *cfg, Conversation *conv, size_t payload_bytes,
-                                    char *status_buf, size_t status_len) {
+static bool maybe_autoscale_wrapper(WrapperConfig *cfg, Conversation *conv, Scrollback *history, size_t *scroll_offset,
+                                    size_t payload_bytes, char *status_buf, size_t status_len) {
   if (!cfg || cfg->autoscale_mode == WRAPPER_AUTOSCALE_NONE) {
     return false;
   }
@@ -468,7 +566,7 @@ static bool maybe_autoscale_wrapper(WrapperConfig *cfg, Conversation *conv, size
   }
 
   if (conv) {
-    conversation_add(conv, "System-MPI", note);
+    conversation_log(conv, history, scroll_offset, "System-MPI", note);
   }
   if (status_buf && status_len > 0) {
     snprintf(status_buf, status_len, "%s", note);
@@ -599,7 +697,8 @@ static int build_command(const WrapperConfig *cfg, const char *payload_path, cha
   return 0;
 }
 
-static void report_wrapper_error(Conversation *conv, StringBuffer *last_output, const char *message) {
+static void report_wrapper_error(Conversation *conv, Scrollback *history, size_t *scroll_offset,
+                                 StringBuffer *last_output, const char *message) {
   if (last_output) {
     sb_reset(last_output);
   }
@@ -609,22 +708,22 @@ static void report_wrapper_error(Conversation *conv, StringBuffer *last_output, 
       sb_append_char(last_output, '\n');
     }
     if (conv) {
-      conversation_add(conv, "System-MPI", message);
+      conversation_log(conv, history, scroll_offset, "System-MPI", message);
     }
   }
 }
 
-static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *last_output, char *status_buf,
-                         size_t status_len) {
+static int run_inference(WrapperConfig *cfg, Conversation *conv, Scrollback *history, size_t *scroll_offset,
+                         StringBuffer *last_output, char *status_buf, size_t status_len) {
   if (!cfg || !conv) {
     snprintf(status_buf, status_len, "internal error: missing cfg");
-    report_wrapper_error(conv, last_output, status_buf);
+    report_wrapper_error(conv, history, scroll_offset, last_output, status_buf);
     return -1;
   }
   char payload_path[] = "/tmp/deepseek_payloadXXXXXX";
   if (write_payload_file(conv, payload_path) != 0) {
     snprintf(status_buf, status_len, "unable to create payload file");
-    report_wrapper_error(conv, last_output, status_buf);
+    report_wrapper_error(conv, history, scroll_offset, last_output, status_buf);
     return -1;
   }
 
@@ -637,12 +736,12 @@ static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *l
   int saved_np = cfg->np;
   size_t saved_tasks = cfg->tasks;
   bool saved_tasks_set = cfg->tasks_set;
-  maybe_autoscale_wrapper(cfg, conv, payload_bytes, status_buf, status_len);
+  maybe_autoscale_wrapper(cfg, conv, history, scroll_offset, payload_bytes, status_buf, status_len);
 
   char *argv[32];
   if (build_command(cfg, payload_path, argv, sizeof argv / sizeof(argv[0])) != 0) {
     snprintf(status_buf, status_len, "failed to prepare mpi command");
-    report_wrapper_error(conv, last_output, status_buf);
+    report_wrapper_error(conv, history, scroll_offset, last_output, status_buf);
     unlink(payload_path);
     cfg->np = saved_np;
     cfg->tasks = saved_tasks;
@@ -658,7 +757,7 @@ static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *l
 
   if (rc != 0) {
     snprintf(status_buf, status_len, "%s", errbuf);
-    report_wrapper_error(conv, last_output, status_buf);
+    report_wrapper_error(conv, history, scroll_offset, last_output, status_buf);
     sb_clean(&response);
     cfg->np = saved_np;
     cfg->tasks = saved_tasks;
@@ -676,7 +775,7 @@ static int run_inference(WrapperConfig *cfg, Conversation *conv, StringBuffer *l
       sb_append_str(last_output, "\n... [truncated]\n");
     }
   }
-  conversation_add(conv, "DeepSeek-MPI", response.data);
+  conversation_log(conv, history, scroll_offset, "DeepSeek-MPI", response.data);
   sb_clean(&response);
   snprintf(status_buf, status_len, "DeepSeek MPI run completed.");
   cfg->np = saved_np;
@@ -854,8 +953,11 @@ int main(int argc, char **argv) {
   WINDOW *input_win = NULL;
   build_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
 
+  Scrollback history = {0};
+  size_t scroll_offset = 0;
+
   Conversation conv = {0};
-  conversation_add(&conv, "System-MPI",
+  conversation_log(&conv, &history, &scroll_offset, "System-MPI",
                    "Welcome to the DeepSeek MPI chat wrapper. Talk to DeepSeek like the hosted chat UI, but backed by MPI ranks. Use /help for commands.");
 
   char status_line[256] = "DeepSeek MPI chat ready.";
@@ -866,7 +968,7 @@ int main(int argc, char **argv) {
 
   bool running = true;
   while (running) {
-    draw_conversation(conversation_outer, conversation_inner, &conv);
+    draw_conversation(conversation_outer, conversation_inner, &history, scroll_offset);
     draw_output(output_win, &last_output);
     draw_status(status_win, status_line);
     draw_input(input_win, "DeepSeek MPI>", current_input.data ? current_input.data : "");
@@ -880,6 +982,12 @@ int main(int argc, char **argv) {
       running = false;
       continue;
     }
+    int conv_lines = getmaxy(conversation_inner);
+    if (conv_lines <= 0) {
+      conv_lines = 1;
+    }
+    size_t visible_lines = (size_t) conv_lines;
+    size_t max_scroll = history.count > visible_lines ? history.count - visible_lines : 0;
     if (ch == KEY_RESIZE) {
       build_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
       continue;
@@ -888,14 +996,51 @@ int main(int argc, char **argv) {
       running = false;
       continue;
     }
-    if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN || ch == KEY_HOME || ch == KEY_END) {
+    if (ch == KEY_PPAGE) {
+      size_t jump = visible_lines > 1 ? visible_lines - 1 : 1;
+      if (scroll_offset < max_scroll) {
+        scroll_offset += jump;
+        if (scroll_offset > max_scroll) {
+          scroll_offset = max_scroll;
+        }
+      }
+      continue;
+    }
+    if (ch == KEY_NPAGE) {
+      size_t jump = visible_lines > 1 ? visible_lines - 1 : 1;
+      if (scroll_offset > 0) {
+        scroll_offset = scroll_offset > jump ? scroll_offset - jump : 0;
+      }
+      continue;
+    }
+    if (ch == KEY_UP) {
+      if (scroll_offset < max_scroll) {
+        scroll_offset++;
+      }
+      continue;
+    }
+    if (ch == KEY_DOWN) {
+      if (scroll_offset > 0) {
+        scroll_offset--;
+      }
+      continue;
+    }
+    if (ch == KEY_HOME) {
+      scroll_offset = max_scroll;
+      continue;
+    }
+    if (ch == KEY_END) {
+      scroll_offset = 0;
+      continue;
+    }
+    if (ch == KEY_LEFT || ch == KEY_RIGHT) {
       continue;
     }
     if (ch == '\n') {
       const char *line = current_input.data ? current_input.data : "";
       bool should_quit = false;
       if (line[0] == '/') {
-        handle_command(line, &cfg, &conv, status_line, sizeof status_line, &should_quit);
+        handle_command(line, &cfg, &conv, &history, &scroll_offset, status_line, sizeof status_line, &should_quit);
         sb_reset(&current_input);
         if (should_quit) {
           running = false;
@@ -907,12 +1052,12 @@ int main(int argc, char **argv) {
       } else if (strlen(line) == 0) {
         snprintf(status_line, sizeof status_line, "Please enter a DeepSeek prompt or /help.");
       } else {
-        conversation_add(&conv, "You@DeepSeekMPI", line);
+        conversation_log(&conv, &history, &scroll_offset, "You@DeepSeekMPI", line);
         sb_reset(&current_input);
         snprintf(status_line, sizeof status_line, "Running DeepSeek MPI chat inference...");
         draw_status(status_win, status_line);
         wrefresh(status_win);
-        run_inference(&cfg, &conv, &last_output, status_line, sizeof status_line);
+        run_inference(&cfg, &conv, &history, &scroll_offset, &last_output, status_line, sizeof status_line);
       }
       sb_reset(&current_input);
       continue;
@@ -935,6 +1080,7 @@ int main(int argc, char **argv) {
   endwin();
   destroy_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
   conversation_free(&conv);
+  scrollback_clear(&history);
   sb_clean(&current_input);
   sb_clean(&last_output);
   free(cfg.binary_path);

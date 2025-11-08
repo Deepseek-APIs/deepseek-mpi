@@ -234,7 +234,10 @@ ProgramConfig config_defaults(void) {
   cfg.target_tasks = 0;
   cfg.target_tasks_set = false;
   cfg.response_files_enabled = true;
-  cfg.pause_on_exit = false;
+  cfg.pause_on_exit = true;
+  cfg.payload_file = NULL;
+  cfg.mpirun_cmd = cfg_strdup("mpirun");
+  cfg.mpi_processes = 4;
 
   cfg.chunk_size = DEEPSEEK_DEFAULT_CHUNK_SIZE;
   cfg.max_request_bytes = DEEPSEEK_DEFAULT_MAX_REQUEST;
@@ -297,6 +300,8 @@ void config_free(ProgramConfig *config) {
   free(config->response_dir);
   free(config->model);
   free(config->anthropic_version);
+  free(config->payload_file);
+  free(config->mpirun_cmd);
   config->api_endpoint = NULL;
   config->api_key_env = NULL;
   config->explicit_api_key = NULL;
@@ -306,7 +311,7 @@ void config_free(ProgramConfig *config) {
   config->config_file = NULL;
   config->response_dir = NULL;
   config->response_files_enabled = true;
-  config->pause_on_exit = false;
+  config->pause_on_exit = true;
   config->model = NULL;
   config->anthropic_version = NULL;
   config->target_tasks = 0;
@@ -319,6 +324,9 @@ void config_free(ProgramConfig *config) {
   config->auto_scale_mode = AUTOSCALE_MODE_NONE;
   config->auto_scale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
   config->auto_scale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
+  config->payload_file = NULL;
+  config->mpirun_cmd = NULL;
+  config->mpi_processes = 4;
 }
 
 static void config_apply_provider(ProgramConfig *config, ApiProvider provider, bool lock) {
