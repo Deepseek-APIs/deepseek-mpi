@@ -68,13 +68,16 @@ mpirun -np 4 ./src/deepseek_mpi \
   --api-provider deepseek
 ```
 
+Type your prompt in the ncurses window and finish with a single `.` on its own line. Logs (or `-vv` HTTP traces) print directly on stdout once the prompt window closes; add `--tui-log-view` if you prefer the old split-pane log view.
+
 Common flag combos:
 
 - Switch providers: `--api-provider openai --model gpt-4o-mini`, `--api-provider anthropic --anthropic-version 2023-06-01`, or `--api-provider zai --model glm-4-plus`. DeepSeek’s own endpoint (`https://api.deepseek.com/chat/completions`) is OpenAI-compatible, so the default provider works as soon as you export `DEEPSEEK_API_KEY`.
 - Run from stdin: `cat payload.txt | mpirun -np 4 ./src/deepseek_mpi --stdin`.
 - Non-interactive batching: `--input-file payload.txt --no-tui --show-progress`.
-- Interactive CLI without ncurses: `--no-tui --readline`.
+- Interactive CLI without ncurses: `--no-tui --readline` (finish with a single `.` line, just like the TUI).
 - Autoscaling large payloads: `--auto-scale-mode chunks --auto-scale-threshold 150000000 --auto-scale-factor 4`.
+- Need a pause to read logs before exiting? Add `--wait-exit`. Leave it off (default) for non-interactive or scripted runs.
 
 See the [CLI reference](cli.md) for every option.
 

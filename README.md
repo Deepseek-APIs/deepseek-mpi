@@ -75,7 +75,7 @@ open doc/html/index.html
 - `--input-file payload.txt` or `--stdin`
 - `--inline-text "quick payload"` bypasses TUI
 - `--repl` keeps the MPI ranks alive in a REPL-style loop so every new prompt includes prior turns
-- `--no-tui` forces batch flow
+- `--no-tui --readline` switches to a plain GNU Readline prompt; type your payload and finish with a single `.` on its own line
 - `--max-retries 5 --retry-delay-ms 750`
 - `--network-retries 2` lets each MPI rank tear down and rebuild its HTTP client after transient network failures before giving up on a chunk
 - `--timeout 45` (seconds)
@@ -96,8 +96,9 @@ Combine options freely; every flag is also available from a simple key/value con
 ## Workflow Notes
 - The application requires an API key in the environment (`DEEPSEEK_API_KEY` by default).
 - `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are auto-selected when you switch providers (override with `--api-key-env` if your endpoint uses a custom variable name).
-- Rank 0 hosts the TUI; non-root ranks wait for the broadcast payload.
-- When the TUI is disabled, the client pivots to a GNU Readline prompt (unless `--no-readline`) so you still get history and multiline editing before broadcasting to MPI ranks.
+- Rank 0 hosts the ncurses TUI by default: optionally preload a file path, then type your payload and finish with a single `.` on its own line to send it to all ranks.
+- Prefer a terminal REPL? Run `--no-tui --readline` (or `use_tui=false`, `use_readline_prompt=true`) and use the same `.` terminator; logs appear immediately below the prompt.
+- Add `--wait-exit` if you want a “Press Enter to exit…” pause after the cluster summary; CI/batch jobs should stick with the default (`--no-wait-exit`).
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
 - Response files are enabled by default (saved under `responses/` per rank/chunk). Disable with `--no-response-files` if you only want log output.
