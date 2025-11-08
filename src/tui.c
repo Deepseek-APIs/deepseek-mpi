@@ -4,6 +4,7 @@
 #include "config.h"
 #endif
 
+#include <errno.h>
 #include <limits.h>
 #include <ncurses.h>
 #include <signal.h>
@@ -11,6 +12,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "file_loader.h"
 #include "string_buffer.h"
@@ -88,17 +90,33 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
   mvprintw(row++, 2, "Rank 0 interactive mode");
   mvprintw(row++, 2, "Press Ctrl+C to cancel the current line without exiting.");
   row++;
-  mvprintw(row++, 2, "Enter optional file path to preload (leave empty to skip):");
+  int preload_prompt_row = row++;
+  int preload_input_row = row++;
+  int preload_status_row = row++;
   char file_path[PATH_MAX];
-  memset(file_path, 0, sizeof file_path);
-  echo();
-  mvgetnstr(row++, 4, file_path, (int) sizeof(file_path) - 1);
-  noecho();
 
   StringBuffer buffer;
   sb_init(&buffer);
 
-  if (file_path[0] != '\0') {
+  bool preload_complete = false;
+  while (!preload_complete) {
+    mvprintw(preload_prompt_row, 2, "Enter optional file path to preload (leave empty to skip):");
+    move(preload_input_row, 4);
+    clrtoeol();
+    memset(file_path, 0, sizeof file_path);
+    echo();
+    getnstr(file_path, (int) sizeof(file_path) - 1);
+    noecho();
+    if (file_path[0] == '\0') {
+      mvprintw(preload_status_row, 2, "No preload file selected.");
+      preload_complete = true;
+      break;
+    }
+    if (access(file_path, R_OK) != 0) {
+      mvprintw(preload_status_row, 2, "Path '%s' not found (%s). Try again or leave blank to skip.", file_path,
+               strerror(errno));
+      continue;
+    }
     char *file_data = NULL;
     char *err = NULL;
     size_t file_len = 0;
@@ -114,7 +132,10 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
       append_file_payload(&buffer);
       free(file_data);
     }
+    mvprintw(preload_status_row, 2, "Loaded %s.", file_path);
+    preload_complete = true;
   }
+  row = preload_status_row + 1;
 
   row++;
   mvprintw(row++, 2, "Type payload text below. Finish with a single '.' on a line.");

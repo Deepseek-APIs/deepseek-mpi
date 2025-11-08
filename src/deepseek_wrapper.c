@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -54,6 +55,13 @@ typedef struct {
   int autoscale_factor;
   int autoscale_max_np;
 } WrapperConfig;
+
+static volatile sig_atomic_t wrapper_sigint_flag = 0;
+
+static void wrapper_sigint_handler(int signo) {
+  (void) signo;
+  wrapper_sigint_flag = 1;
+}
 
 static int parse_autoscale_mode_arg(const char *text, WrapperAutoscaleMode *out) {
   if (!text || !out) {
@@ -826,6 +834,13 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  struct sigaction old_action;
+  struct sigaction new_action;
+  sigemptyset(&new_action.sa_mask);
+  new_action.sa_flags = 0;
+  new_action.sa_handler = wrapper_sigint_handler;
+  sigaction(SIGINT, &new_action, &old_action);
+
   initscr();
   cbreak();
   noecho();
@@ -860,11 +875,20 @@ int main(int argc, char **argv) {
     if (ch == ERR) {
       continue;
     }
+    if (wrapper_sigint_flag) {
+      wrapper_sigint_flag = 0;
+      running = false;
+      continue;
+    }
     if (ch == KEY_RESIZE) {
       build_windows(&conversation_outer, &conversation_inner, &output_win, &status_win, &input_win);
       continue;
     }
-    if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN) {
+    if (ch == 3) { // Ctrl+C
+      running = false;
+      continue;
+    }
+    if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN || ch == KEY_HOME || ch == KEY_END) {
       continue;
     }
     if (ch == '\n') {
@@ -915,5 +939,6 @@ int main(int argc, char **argv) {
   sb_clean(&last_output);
   free(cfg.binary_path);
   free(cfg.response_dir);
+  sigaction(SIGINT, &old_action, NULL);
   return EXIT_SUCCESS;
 }

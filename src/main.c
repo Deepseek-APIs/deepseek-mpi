@@ -30,6 +30,8 @@ typedef struct {
 
 static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *payload, Logger *logger);
 static void maybe_autoscale_payload(ProgramConfig *config, const Payload *payload, Logger *logger);
+static int ensure_input_file_available(ProgramConfig *config, Logger *logger);
+static void pause_before_exit(const ProgramConfig *config, Logger *logger);
 
 static void assign_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
@@ -78,6 +80,84 @@ static int duplicate_text(const char *text, Payload *payload, char **error_out) 
   return 0;
 }
 
+static FILE *open_tty_stream(const char *mode) {
+  FILE *tty = fopen("/dev/tty", mode);
+  if (!tty) {
+    return NULL;
+  }
+  return tty;
+}
+
+static int prompt_for_file_replacement(ProgramConfig *config, const char *missing_path) {
+  if (!config) {
+    return -1;
+  }
+  FILE *tty_in = open_tty_stream("r");
+  FILE *tty_out = open_tty_stream("w");
+  if (!tty_in) {
+    tty_in = stdin;
+  }
+  if (!tty_out) {
+    tty_out = stderr;
+  }
+  if (!tty_in) {
+    return -1;
+  }
+  char buffer[PATH_MAX];
+  while (1) {
+    fprintf(tty_out, "File '%s' not found. Enter a new path: ", missing_path);
+    fflush(tty_out);
+    if (!fgets(buffer, sizeof buffer, tty_in)) {
+      if (tty_in != stdin) {
+        fclose(tty_in);
+      }
+      if (tty_out != stderr) {
+        fclose(tty_out);
+      }
+      return -1;
+    }
+    buffer[strcspn(buffer, "\r\n")] = '\0';
+    if (buffer[0] == '\0') {
+      fprintf(tty_out, "Path cannot be empty. Please provide a file path.\n");
+      continue;
+    }
+    if (access(buffer, R_OK) == 0) {
+      config_replace_string(&config->input_file, buffer);
+      if (tty_in != stdin) {
+        fclose(tty_in);
+      }
+      if (tty_out != stderr) {
+        fclose(tty_out);
+      }
+      return 0;
+    }
+    fprintf(tty_out, "Path '%s' still unavailable: %s\n", buffer, strerror(errno));
+  }
+}
+
+static int ensure_input_file_available(ProgramConfig *config, Logger *logger) {
+  if (!config || !config->input_file) {
+    return 0;
+  }
+  while (config->input_file && strcmp(config->input_file, "-") != 0) {
+    if (access(config->input_file, R_OK) == 0) {
+      return 0;
+    }
+    if (errno == ENOENT) {
+      logger_log(logger, LOG_LEVEL_WARN, "File %s not found.", config->input_file);
+      int prompt = prompt_for_file_replacement(config, config->input_file);
+      if (prompt == 0) {
+        continue;
+      }
+      return -1;
+    } else {
+      logger_log(logger, LOG_LEVEL_ERROR, "Unable to access %s: %s", config->input_file, strerror(errno));
+      return -1;
+    }
+  }
+  return 0;
+}
+
 static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *payload) {
   if (!config || !payload) {
     return -1;
@@ -90,8 +170,11 @@ static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *p
       logger_log(logger, LOG_LEVEL_INFO, "Reading payload from stdin (-)");
       rc = load_from_stream(stdin, payload, &error);
     } else {
-      logger_log(logger, LOG_LEVEL_INFO, "Reading payload from file %s", config->input_file);
-      rc = file_loader_read_all(config->input_file, &payload->data, &payload->length, &error);
+      rc = ensure_input_file_available(config, logger);
+      if (rc == 0) {
+        logger_log(logger, LOG_LEVEL_INFO, "Reading payload from file %s", config->input_file);
+        rc = file_loader_read_all(config->input_file, &payload->data, &payload->length, &error);
+      }
     }
   } else if (config->use_stdin) {
     logger_log(logger, LOG_LEVEL_INFO, "Reading payload from stdin (flag)");
@@ -290,11 +373,9 @@ static void pause_before_exit(const ProgramConfig *config, Logger *logger) {
   if (!config->pause_on_exit) {
     return;
   }
-  FILE *stream = NULL;
-  if (isatty(STDIN_FILENO)) {
+  FILE *stream = fopen("/dev/tty", "r");
+  if (!stream) {
     stream = stdin;
-  } else {
-    stream = fopen("/dev/tty", "r");
   }
   if (!stream) {
     return;
@@ -615,7 +696,7 @@ int main(int argc, char **argv) {
 
   Payload shared_payload = {shared_buffer, payload_len};
   bool tui_log_active = false;
-  if (config.rank == 0 && config.use_tui) {
+  if (config.rank == 0 && config.use_tui && config.use_tui_log_view) {
     if (tui_log_view_start() == 0) {
       logger_set_sink(&logger, tui_logger_sink, NULL);
       logger.mirror_stdout = false;

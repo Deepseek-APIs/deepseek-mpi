@@ -85,6 +85,7 @@ open doc/html/index.html
 - `--response-files / --no-response-files` toggle per-rank response files (default enabled with directory `responses/`)
 - `--wait-exit / --no-wait-exit` pause on completion so you can read the MPI logs before the ranks tear down (default on when attached to a TTY)
 - `--readline / --no-readline` choose between GNU Readline prompts or plain stdin when the ncurses TUI is disabled
+- `--tui-log-view / --no-tui-log-view` opt into the post-prompt ncurses log pane (default off; logs print below the prompt)
 - `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
 - `--tasks 16` divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
 - `--auto-scale-mode chunks --auto-scale-threshold 100000000 --auto-scale-factor 4` splits giant uploads into additional logical tasks; swap `chunks` for `threads` (via the wrapper) to bump `mpirun -np` automatically once the threshold is crossed
@@ -105,7 +106,7 @@ Combine options freely; every flag is also available from a simple key/value con
 - Autoscaling keeps big drops moving: chunk mode divides payloads across existing ranks, while wrapper `--auto-scale-mode threads` multiplies the MPI rank count on the fly when a prompt crosses your size threshold.
 - Provider detection is automatic: endpoints, environment variable names, and well-known key prefixes (Anthropic `sk-ant-`, GLM `gk-`/`glm-`, Azure OpenAI `sk-aoai-`/`sk-az-`, etc.) steer the client toward the right REST API. Explicitly set `--api-provider` if you need to override the heuristic.
 - Inside the ncurses TUI, use `:set key=value`, `:show-config`, or `:config-help` to tweak runtime settings (endpoints, chunk sizes, providers, etc.) before launching the MPI job.
-- With `--tui` enabled, MPI logs now stream live inside the ncurses window instead of bouncing back to raw stdout, so you can watch rank activity without the screen flicker.
+- Add `--tui-log-view` if you prefer the classic post-prompt ncurses pane that streams MPI logs; otherwise logs print below the prompt once the TUI input closes.
 - Use the `deepseek_wrapper` helper when you want something closer to the OpenAI Codex UX; it logs MPI output in-line and reuses the same configuration flags under the hood.
 - Use git for change tracking – a clean history keeps regressions easy to spot.
 - When you need a guided UX, run `./src/deepseek_wrapper --np 4 --binary ./src/deepseek_mpi`. Every time you hit Enter the wrapper gathers the ongoing conversation, writes a payload file, and invokes `mpirun` with the requested rank count. Type `:quit` or press `Esc` to exit.

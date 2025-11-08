@@ -249,6 +249,7 @@ ProgramConfig config_defaults(void) {
   cfg.show_progress = true;
   cfg.use_tui = true;
   cfg.use_readline_prompt = true;
+  cfg.use_tui_log_view = false;
   cfg.dry_run = false;
   cfg.allow_file_prompt = true;
   cfg.use_stdin = false;
@@ -312,6 +313,7 @@ void config_free(ProgramConfig *config) {
   config->max_output_tokens = AI_DEFAULT_MAX_OUTPUT_TOKENS;
   config->provider = API_PROVIDER_DEEPSEEK;
   config->use_readline_prompt = true;
+  config->use_tui_log_view = false;
   config->auto_scale_mode = AUTOSCALE_MODE_NONE;
   config->auto_scale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
   config->auto_scale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
@@ -481,6 +483,13 @@ int config_apply_kv(ProgramConfig *config, const char *key, const char *value, c
       return -1;
     }
     config->response_files_enabled = enabled;
+  } else if (strcmp(key, "tui_log_view") == 0) {
+    bool enabled;
+    if (parse_bool_value(val, &enabled) != 0) {
+      cfg_assign_error(error_out, "invalid tui_log_view value: %s", val);
+      return -1;
+    }
+    config->use_tui_log_view = enabled;
   } else if (strcmp(key, "pause_on_exit") == 0) {
     bool enabled;
     if (parse_bool_value(val, &enabled) != 0) {

@@ -34,7 +34,9 @@ enum {
   OPT_READLINE_OFF,
   OPT_AUTOSCALE_MODE,
   OPT_AUTOSCALE_THRESHOLD,
-  OPT_AUTOSCALE_FACTOR
+  OPT_AUTOSCALE_FACTOR,
+  OPT_TUI_LOG_VIEW_ON,
+  OPT_TUI_LOG_VIEW_OFF
 };
 
 static void print_version(void) {
@@ -70,6 +72,7 @@ static void print_help(const char *prog) {
        "  --retry-delay-ms MS        Delay between retries in milliseconds\n"
        "  --network-retries N        MPI-level client resets after network failures\n"
        "  --readline / --no-readline  Toggle GNU Readline prompt when TUI is disabled\n"
+       "  --tui-log-view / --no-tui-log-view  Show MPI logs in a curses pane after prompt capture\n"
        "  --tui / --no-tui           Toggle ncurses interface\n"
        "  --dry-run                  Skip HTTP calls (for smoke tests)\n"
        "  --verbose / --quiet        Adjust console verbosity\n"
@@ -212,6 +215,8 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"no-response-files", no_argument, NULL, OPT_RESPONSE_FILES_OFF},
       {"wait-exit", no_argument, NULL, OPT_WAIT_EXIT_ON},
       {"no-wait-exit", no_argument, NULL, OPT_WAIT_EXIT_OFF},
+      {"tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_ON},
+      {"no-tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_OFF},
       {"tasks", required_argument, NULL, OPT_TASKS},
       {"auto-scale-mode", required_argument, NULL, OPT_AUTOSCALE_MODE},
       {"auto-scale-threshold", required_argument, NULL, OPT_AUTOSCALE_THRESHOLD},
@@ -423,6 +428,12 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       break;
     case OPT_DRY_RUN:
       config->dry_run = true;
+      break;
+    case OPT_TUI_LOG_VIEW_ON:
+      config->use_tui_log_view = true;
+      break;
+    case OPT_TUI_LOG_VIEW_OFF:
+      config->use_tui_log_view = false;
       break;
     case OPT_SHOW_PROGRESS:
       config->show_progress = true;
