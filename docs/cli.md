@@ -58,6 +58,7 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--verbose`, `-v` | Increase verbosity (debug logging at level 2). |
 | `--quiet`, `-q` | Disable log mirroring (forces verbosity 0). |
 | `--progress-interval N`, `-p N` | Print a progress log entry every N chunks per rank. |
+| `--tui-log-view` / `--no-tui-log-view` | Opt into (or out of) the post-prompt ncurses pane that streams MPI logs. |
 
 ## Execution Flow
 
