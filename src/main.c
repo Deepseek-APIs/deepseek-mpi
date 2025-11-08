@@ -772,16 +772,16 @@ static int run_repl_session(ProgramConfig *config, Logger *logger) {
     if (config->rank == 0) {
       sb_init(&repl_response);
     }
-    execute_payload(config, logger, &composite, config->rank == 0 ? &repl_response : NULL);
+    int exec_rc = execute_payload(config, logger, &composite, config->rank == 0 ? &repl_response : NULL);
 
     if (config->rank == 0) {
       sb_append_printf(&history, "User #%zu:\n%.*s\n", turn,
                        (int) (prompt.length), prompt.data ? prompt.data : "");
-      if (repl_response.length > 0 && repl_response.data) {
+      if (exec_rc == 0 && repl_response.length > 0 && repl_response.data) {
         sb_append_printf(&history, "Assistant #%zu:\n%.*s\n\n", turn,
                          (int) repl_response.length, repl_response.data);
       } else {
-        sb_append_printf(&history, "Assistant #%zu:\n(no response)\n\n", turn);
+        sb_append_printf(&history, "Assistant #%zu:\n(no response available)\n\n", turn);
       }
       sb_clean(&repl_response);
     }
@@ -831,7 +831,9 @@ int main(int argc, char **argv) {
                world_size);
   }
   bool logger_mirror_initial = logger.mirror_stdout;
-  if (config.use_tui && world_size > 1 && rank != 0) {
+  bool suppress_nonroot_stdout = (world_size > 1 && rank != 0 &&
+                                  (config.use_tui || config.use_readline_prompt));
+  if (suppress_nonroot_stdout) {
     logger.mirror_stdout = false;
   }
 

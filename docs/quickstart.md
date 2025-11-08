@@ -143,5 +143,6 @@ Or skip `autogen.sh` and run `autoreconf -fi` followed by the usual `configure &
 
 - Dive into the [Configuration guide](configuration.md) to tune retries, chunk sizing, providers, and config files.
 - Familiarize yourself with the [`deepseek_wrapper`](../src/deepseek_wrapper.c) if you need a Codex-style REPL.
+- Try the built-in `--repl` flag when you want to keep MPI ranks alive between prompts but prefer the stock `deepseek_mpi` interface.
 - Publish these docs on GitBook by following the [GitBook guide](gitbook.md).
 - Review the [Operations guide](operations.md) to plan logging, monitoring, and autoscaling policies before your first production rollout.

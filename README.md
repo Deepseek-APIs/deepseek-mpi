@@ -74,6 +74,7 @@ open doc/html/index.html
 - `--chunk-size 4096` (bytes per segment)
 - `--input-file payload.txt` or `--stdin`
 - `--inline-text "quick payload"` bypasses TUI
+- `--repl` keeps the MPI ranks alive in a REPL-style loop so every new prompt includes prior turns
 - `--no-tui` forces batch flow
 - `--max-retries 5 --retry-delay-ms 750`
 - `--network-retries 2` lets each MPI rank tear down and rebuild its HTTP client after transient network failures before giving up on a chunk

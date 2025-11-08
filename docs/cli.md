@@ -17,6 +17,7 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--tasks N` | Desired logical task count; chunk size auto-adjusts. |
 | `--allow-file-prompt` | Enable TUI file attach (default on). |
 | `--readline` / `--no-readline` | Toggle the GNU Readline prompt used when the TUI is disabled. |
+| `--repl` | Keep `deepseek_mpi` running in an interactive REPL; previous prompts/responses are threaded into the next prompt. |
 
 ## API Provider & Authentication
 

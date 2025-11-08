@@ -36,6 +36,7 @@ When debugging, run `./src/deepseek_mpi --verbosity 2` to see the resolved confi
 | Autoscale mode | `none` | `chunks` and `threads` require explicit opt-in. |
 | Autoscale threshold | `100 MB` | Multiplies tasks/ranks when exceeded (mode dependent). |
 | Autoscale factor | `2` | Doubling is a good starting point. |
+| REPL mode | `false` | Enable with `--repl` to keep MPI ranks alive between prompts. |
 | Show progress | `true` | Toggle with `--hide-progress`. |
 | Use TUI | `true` | Disable via `--no-tui` or `use_tui=false`. |
 | Use Readline | `true` | When the TUI is disabled, fallback to GNU Readline. |

@@ -8,6 +8,7 @@ Welcome to the Deepseek MPI documentation hub. This GitBook-ready tree mirrors a
 - [CLI Reference](cli.md) – exhaustive flag tables with usage snippets and advanced examples.
 - [Configuration](configuration.md) – environment variables, autoscaling, response capture, and resiliency tuning.
 - [Operations](operations.md) – day‑2 guidance covering logging, troubleshooting, autoscaling strategies, and wrapper UX.
+- **New:** `--repl` mode keeps `deepseek_mpi` running between prompts so every new request contains the prior conversation (without resending raw files).
 - [GitBook Publishing](gitbook.md) – how to connect this repo to GitBook, polish the space, and keep it synced.
 
 Each page intentionally contains fully fleshed-out instructions so they render well on GitBook. You can extend the tree with additional Markdown files (e.g., “Release Notes” or “API Reference”) and register them in `SUMMARY.md`.
