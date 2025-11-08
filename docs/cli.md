@@ -68,6 +68,7 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--dry-run` | Skip HTTP calls; still slices payloads and exercises MPI/logging. |
 | `--config FILE` | Load `key=value` defaults before processing CLI flags. |
 | `--upload PATH` | Legacy alias for `--input-file`. |
+| `--wait-exit` / `--no-wait-exit` | Pause for Enter at the end of a TTY run (off by default). |
 | `--version` | Print build version and exit. |
 | `--help`, `-h` | CLI usage summary. |
 

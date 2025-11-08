@@ -234,7 +234,7 @@ ProgramConfig config_defaults(void) {
   cfg.target_tasks = 0;
   cfg.target_tasks_set = false;
   cfg.response_files_enabled = true;
-  cfg.pause_on_exit = true;
+  cfg.pause_on_exit = false;
 
   cfg.chunk_size = DEEPSEEK_DEFAULT_CHUNK_SIZE;
   cfg.max_request_bytes = DEEPSEEK_DEFAULT_MAX_REQUEST;
@@ -306,7 +306,7 @@ void config_free(ProgramConfig *config) {
   config->config_file = NULL;
   config->response_dir = NULL;
   config->response_files_enabled = true;
-  config->pause_on_exit = true;
+  config->pause_on_exit = false;
   config->model = NULL;
   config->anthropic_version = NULL;
   config->target_tasks = 0;
