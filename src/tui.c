@@ -42,6 +42,8 @@ static const int TUI_MIN_INPUT_ROWS = 4; // reserve extra lines for multi-line p
 static bool tui_log_quiet = false;
 static bool tui_history_enabled = false;
 static WINDOW *tui_log_window = NULL;
+static void repl_ui_print_line(const char *line);
+static bool repl_ui_handle_prompt_command(const char *line, StringBuffer *buffer, bool *should_exit);
 
 typedef struct {
   WINDOW *outwin;
@@ -326,6 +328,30 @@ static void repl_ui_set_focus(bool focus_file) {
   repl_ui_draw_field_frame(repl_ui.input_frame, " Prompt ", !focus_file);
 }
 
+static void repl_ui_print_system_message(const char *text) {
+  repl_ui_print_line("System-MPI:");
+  if (text && *text) {
+    repl_ui_print_line(text);
+  }
+  repl_ui_print_line("");
+}
+
+static void repl_ui_show_help(void) {
+  repl_ui_print_line("System-MPI:");
+  repl_ui_print_line("DeepSeek MPI chat commands:");
+  repl_ui_print_line("  /help                  Show this message");
+  repl_ui_print_line("  /quit or /exit         Leave the REPL");
+  repl_ui_print_line("  /np <n>                Reminder to restart mpirun with a new -np value");
+  repl_ui_print_line("  /clear                 Reset the pending prompt/upload buffer");
+  repl_ui_print_line("");
+}
+
+static void repl_ui_show_welcome(void) {
+  repl_ui_print_system_message(
+      "Welcome to the DeepSeek MPI REPL. Type your prompt below; load files above. Use /help for commands.");
+  repl_ui_show_help();
+}
+
 static void repl_ui_print_line(const char *line) {
   if (!repl_ui.active || !repl_ui.outwin) {
     return;
@@ -425,6 +451,7 @@ static int repl_ui_init(void) {
     return -1;
   }
   repl_ui.active = true;
+  repl_ui_show_welcome();
   return 0;
 }
 
@@ -906,6 +933,18 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
     }
     if (ch == '\r' || ch == '\n' || ch == KEY_ENTER) {
       prompt_line[prompt_pos] = '\0';
+      bool exit_requested = false;
+      if (prompt_line[0] == '/' &&
+          repl_ui_handle_prompt_command(prompt_line, &buffer, &exit_requested)) {
+        prompt_pos = 0;
+        prompt_line[0] = '\0';
+        repl_ui_update_prompt_input(prompt_line, prompt_pos);
+        if (exit_requested) {
+          collecting = false;
+          break;
+        }
+        continue;
+      }
       if (strcmp(prompt_line, ".") == 0) {
         collecting = false;
         break;
@@ -1022,4 +1061,59 @@ void tui_logger_sink(LoggerLevel level, int process_rank, const char *timestamp,
           message ? message : "");
   wrefresh(tui_log_window);
   tui_history_record_log_entry(level, process_rank, timestamp, message);
+}
+static bool repl_ui_handle_prompt_command(const char *line, StringBuffer *buffer, bool *should_exit) {
+  if (!line || line[0] != '/') {
+    return false;
+  }
+  const char *cmd = line + 1;
+  while (*cmd == ' ') {
+    cmd++;
+  }
+  if (*cmd == '\0') {
+    repl_ui_print_system_message("Enter /help for available commands.");
+    return true;
+  }
+  char keyword[32];
+  size_t idx = 0;
+  while (cmd[idx] && !isspace((unsigned char) cmd[idx]) && idx < sizeof keyword - 1) {
+    keyword[idx] = cmd[idx];
+    idx++;
+  }
+  keyword[idx] = '\0';
+  const char *args = cmd + idx;
+  while (*args == ' ') {
+    args++;
+  }
+  if (strcasecmp(keyword, "help") == 0) {
+    repl_ui_show_help();
+    return true;
+  }
+  if (strcasecmp(keyword, "clear") == 0) {
+    if (buffer) {
+      sb_reset(buffer);
+    }
+    repl_ui_print_system_message("Cleared pending prompt buffer.");
+    return true;
+  }
+  if (strcasecmp(keyword, "np") == 0) {
+    char note[256];
+    const char *np_text = (*args && *args != '\0') ? args : "<n>";
+    snprintf(note, sizeof note,
+             "This REPL cannot change MPI ranks at runtime. Restart with `mpirun -np %.*s`.", 32, np_text);
+    repl_ui_print_system_message(note);
+    return true;
+  }
+  if (strcasecmp(keyword, "quit") == 0 || strcasecmp(keyword, "exit") == 0) {
+    if (buffer) {
+      sb_reset(buffer);
+      sb_append_str(buffer, ":quit");
+    }
+    if (should_exit) {
+      *should_exit = true;
+    }
+    return true;
+  }
+  repl_ui_print_system_message("Unknown command. Use /help for the command list.");
+  return true;
 }
