@@ -29,6 +29,234 @@ typedef struct {
   size_t length;
 } Payload;
 
+static char *dup_substring(const char *src, size_t len) {
+  if (!src || len == 0) {
+    return NULL;
+  }
+  char *copy = malloc(len + 1);
+  if (!copy) {
+    return NULL;
+  }
+  memcpy(copy, src, len);
+  copy[len] = '\0';
+  return copy;
+}
+
+static int hex_value(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return 10 + (c - 'a');
+  }
+  if (c >= 'A' && c <= 'F') {
+    return 10 + (c - 'A');
+  }
+  return -1;
+}
+
+static void sb_append_codepoint(StringBuffer *out, unsigned int cp) {
+  if (!out) {
+    return;
+  }
+  unsigned char utf8[4];
+  size_t len = 0;
+  if (cp <= 0x7F) {
+    utf8[len++] = (unsigned char) cp;
+  } else if (cp <= 0x7FF) {
+    utf8[len++] = (unsigned char) (0xC0 | ((cp >> 6) & 0x1F));
+    utf8[len++] = (unsigned char) (0x80 | (cp & 0x3F));
+  } else if (cp <= 0xFFFF) {
+    utf8[len++] = (unsigned char) (0xE0 | ((cp >> 12) & 0x0F));
+    utf8[len++] = (unsigned char) (0x80 | ((cp >> 6) & 0x3F));
+    utf8[len++] = (unsigned char) (0x80 | (cp & 0x3F));
+  } else {
+    utf8[len++] = (unsigned char) (0xF0 | ((cp >> 18) & 0x07));
+    utf8[len++] = (unsigned char) (0x80 | ((cp >> 12) & 0x3F));
+    utf8[len++] = (unsigned char) (0x80 | ((cp >> 6) & 0x3F));
+    utf8[len++] = (unsigned char) (0x80 | (cp & 0x3F));
+  }
+  sb_append(out, (const char *) utf8, len);
+}
+
+static void sb_append_unescaped_json(StringBuffer *out, const char *encoded, size_t *consumed) {
+  if (!out || !encoded) {
+    if (consumed) {
+      *consumed = 0;
+    }
+    return;
+  }
+  const char *p = encoded;
+  while (*p) {
+    char c = *p++;
+    if (c == '\\' && *p) {
+      char esc = *p++;
+      switch (esc) {
+      case '"':
+      case '\\':
+      case '/':
+        sb_append_char(out, esc);
+        break;
+      case 'b':
+        sb_append_char(out, '\b');
+        break;
+      case 'f':
+        sb_append_char(out, '\f');
+        break;
+      case 'n':
+        sb_append_char(out, '\n');
+        break;
+      case 'r':
+        sb_append_char(out, '\r');
+        break;
+      case 't':
+        sb_append_char(out, '\t');
+        break;
+      case 'u': {
+        unsigned int value = 0;
+        bool valid = true;
+        for (int i = 0; i < 4; ++i) {
+          if (!p[i]) {
+            valid = false;
+            break;
+          }
+          int hv = hex_value(p[i]);
+          if (hv < 0) {
+            valid = false;
+            break;
+          }
+          value = (value << 4) | (unsigned int) hv;
+        }
+        if (valid) {
+          sb_append_codepoint(out, value);
+          p += 4;
+        }
+        break;
+      }
+      default:
+        sb_append_char(out, esc);
+        break;
+      }
+      continue;
+    }
+    if (c == '"') {
+      break;
+    }
+    sb_append_char(out, c);
+  }
+  if (consumed) {
+    *consumed = (size_t) (p - encoded);
+  }
+}
+
+static void append_json_content_block(StringBuffer *out, const char *json, size_t len) {
+  if (!out || !json || len == 0) {
+    return;
+  }
+  char *copy = dup_substring(json, len);
+  if (!copy) {
+    sb_append(out, json, len);
+    sb_append_str(out, "\n\n");
+    return;
+  }
+  const char *needle = "\"content\":\"";
+  char *content = strstr(copy, needle);
+  if (!content) {
+    sb_append(out, json, len);
+    sb_append_str(out, "\n\n");
+    free(copy);
+    return;
+  }
+  content += strlen(needle);
+  StringBuffer decoded;
+  sb_init(&decoded);
+  sb_append_unescaped_json(&decoded, content, NULL);
+  if (decoded.length == 0) {
+    sb_append(out, json, len);
+    sb_append_str(out, "\n\n");
+    sb_clean(&decoded);
+    free(copy);
+    return;
+  }
+  sb_append_str(out, "[Assistant]\n");
+  sb_append(out, decoded.data, decoded.length);
+  sb_append_str(out, "\n\n");
+  sb_clean(&decoded);
+  free(copy);
+}
+
+static const char *find_double_newline(const char *cursor, const char *end) {
+  if (!cursor || !end) {
+    return NULL;
+  }
+  const char *p = cursor;
+  while (p < end - 1) {
+    if (p[0] == '\n' && p[1] == '\n') {
+      return p;
+    }
+    p++;
+  }
+  return NULL;
+}
+
+static void render_pretty_response_stream(const StringBuffer *raw, StringBuffer *out) {
+  if (!raw || !raw->data || raw->length == 0 || !out) {
+    return;
+  }
+  const char *cursor = raw->data;
+  const char *end = raw->data + raw->length;
+  while (cursor < end) {
+    if (*cursor == '\n') {
+      cursor++;
+      continue;
+    }
+    if ((size_t) (end - cursor) >= 12 && strncmp(cursor, "----- chunk", 11) == 0) {
+      const char *line_end = memchr(cursor, '\n', (size_t) (end - cursor));
+      size_t header_len = line_end ? (size_t) (line_end - cursor) : (size_t) (end - cursor);
+      sb_append(out, cursor, header_len);
+      sb_append_char(out, '\n');
+      cursor = line_end ? line_end + 1 : end;
+      continue;
+    }
+    if (*cursor == '{') {
+      const char *section_end = find_double_newline(cursor, end);
+      size_t json_len = section_end ? (size_t) (section_end - cursor) : (size_t) (end - cursor);
+      append_json_content_block(out, cursor, json_len);
+      cursor = section_end ? section_end + 2 : end;
+      continue;
+    }
+    const char *next = memchr(cursor, '\n', (size_t) (end - cursor));
+    size_t segment_len = next ? (size_t) (next - cursor) : (size_t) (end - cursor);
+    if (segment_len > 0) {
+      sb_append(out, cursor, segment_len);
+      sb_append_char(out, '\n');
+    }
+    cursor = next ? next + 1 : end;
+  }
+}
+
+static void log_pretty_responses(Logger *logger, const char *prefix, const char *raw, size_t len,
+                                 StringBuffer *capture) {
+  if (!logger || !raw || len == 0) {
+    return;
+  }
+  StringBuffer raw_buf = {.data = (char *) raw, .length = len, .capacity = len};
+  StringBuffer pretty;
+  sb_init(&pretty);
+  if (prefix) {
+    sb_append_str(&pretty, prefix);
+  }
+  render_pretty_response_stream(&raw_buf, &pretty);
+  if (pretty.length == 0) {
+    sb_append_str(&pretty, "(no response data)");
+  }
+  logger_log(logger, LOG_LEVEL_INFO, "%s", pretty.data ? pretty.data : "(no response data)");
+  if (capture && pretty.data) {
+    sb_append(capture, pretty.data, pretty.length);
+  }
+  sb_clean(&pretty);
+}
+
 static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *payload, Logger *logger);
 static void maybe_autoscale_payload(ProgramConfig *config, const Payload *payload, Logger *logger);
 static int ensure_input_file_available(ProgramConfig *config, Logger *logger);
@@ -445,19 +673,16 @@ static void stream_responses_after_completion(const ProgramConfig *config, Logge
 
   if (config->world_size == 1) {
     if (local_len > 0 && response_stream->data) {
-      logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses =====\n%.*s\n",
-                 (int) response_stream->length, response_stream->data);
+      log_pretty_responses(logger, "\n===== Responses =====\n",
+                           response_stream->data, response_stream->length, global_out);
     }
     return;
   }
 
   if (config->rank == 0) {
     if (local_len > 0 && response_stream->data) {
-      logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses from rank 0 =====\n%.*s",
-                 (int) response_stream->length, response_stream->data);
-      if (global_out) {
-        sb_append(global_out, response_stream->data, response_stream->length);
-      }
+      log_pretty_responses(logger, "\n===== Responses from rank 0 =====\n",
+                           response_stream->data, response_stream->length, global_out);
     }
     for (int source = 1; source < config->world_size; ++source) {
       unsigned long long incoming = 0;
@@ -485,10 +710,9 @@ static void stream_responses_after_completion(const ProgramConfig *config, Logge
         received += (size_t) chunk;
       }
       buffer[incoming] = '\0';
-      logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses from rank %d =====\n%s", source, buffer);
-      if (global_out) {
-        sb_append(global_out, buffer, strlen(buffer));
-      }
+      char header[128];
+      snprintf(header, sizeof header, "\n===== Responses from rank %d =====\n", source);
+      log_pretty_responses(logger, header, buffer, (size_t) incoming, global_out);
       free(buffer);
     }
   } else {

@@ -19,7 +19,7 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--readline` / `--no-readline` | Toggle the GNU Readline prompt used when the TUI is disabled. |
 | `--repl` | Keep `deepseek_mpi` running in an interactive REPL; previous prompts/responses are threaded into the next prompt. |
 
-In both the ncurses TUI and the Readline REPL, finish your payload by typing a single `.` on its own line. The buffer syncs immediately after that terminator.
+In the standard ncurses TUI and the Readline prompt, finish your payload by typing a single `.` on its own line. When `--repl` is enabled, the split-window UI adds an upload field above the prompt: use `Tab` to toggle between them, Enter on the upload field to pull a file into the buffer, and `Ctrl+K` to send the accumulated prompt.
 
 ## API Provider & Authentication
 
@@ -72,7 +72,7 @@ In both the ncurses TUI and the Readline REPL, finish your payload by typing a s
 | `--upload PATH` | Legacy alias for `--input-file`. |
 | `--version` | Print build version and exit. |
 | `--help`, `-h` | CLI usage summary. |
-| `.` (single dot line) | When using the TUI or `--no-tui --readline`, enter a lone `.` on a new line to send the buffered payload. |
+| `.` (single dot line) | When using the default TUI or `--no-tui --readline`, enter a lone `.` on a new line to send the buffered payload (use `Ctrl+K` inside the REPL TUI). |
 
 ## Examples
 

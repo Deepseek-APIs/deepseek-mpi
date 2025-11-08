@@ -97,7 +97,7 @@ Combine options freely; every flag is also available from a simple key/value con
 - The application requires an API key in the environment (`DEEPSEEK_API_KEY` by default).
 - `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are auto-selected when you switch providers (override with `--api-key-env` if your endpoint uses a custom variable name).
 - Rank 0 hosts the ncurses TUI by default: optionally preload a file path, then type your payload and finish with a single `.` on its own line to send it to all ranks.
-- In `--repl` mode the TUI now mirrors a chat-style split window (scrolling output buffer plus a single-line input bar). Type text, hit Enter to append it to the buffer, and send the prompt with a single `.` on its own line; logs stream in the same pane so the shell never shows raw `mpirun` output mid-session.
+- In `--repl` mode the TUI now mirrors a chat-style split window (scrolling output buffer plus dedicated upload/prompt fields). Use Tab to toggle between the upload path and the prompt, Enter to ingest a file (it streams straight into the buffer for MPI chunking), and press `Ctrl+K` to send the accumulated prompt; logs stay in the same pane so the shell never shows raw `mpirun` output mid-session.
 - Prefer a terminal REPL? Run `--no-tui --readline` (or `use_tui=false`, `use_readline_prompt=true`) and use the same `.` terminator; logs appear immediately below the prompt.
 - Add `--wait-exit` if you want a “Press Enter to exit…” pause after the cluster summary; CI/batch jobs should stick with the default (`--no-wait-exit`).
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
