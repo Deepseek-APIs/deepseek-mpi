@@ -54,6 +54,7 @@ typedef struct {
   bool use_tui;
   bool use_readline_prompt;
   bool use_tui_log_view;
+  bool tui_log_view_explicit;
   bool dry_run;
   bool allow_file_prompt;
   bool use_stdin;

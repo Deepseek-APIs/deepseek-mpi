@@ -40,7 +40,7 @@ When debugging, run `./src/deepseek_mpi --verbosity 2` to see the resolved confi
 | Show progress | `true` | Toggle with `--hide-progress`. |
 | Use TUI | `true` | Disable via `--no-tui` or `use_tui=false`. |
 | Use Readline | `true` | When the TUI is disabled, fallback to GNU Readline. |
-| TUI log view | `false` | Enable with `--tui-log-view` to stream logs in a curses pane after input. |
+| TUI log view | `auto (on when TUI enabled)` | Auto mode hides chunk/progress spam; disable with `--no-tui-log-view` or pass `--tui-log-view` explicitly for the full stream. |
 | Dry run | `false` | No HTTP requests when enabled. |
 
 ## Config Files

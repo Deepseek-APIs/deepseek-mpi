@@ -61,7 +61,7 @@ In both the ncurses TUI and the Readline REPL, finish your payload by typing a s
 | `--verbose`, `-v` | Increase verbosity (debug logging at level 2). |
 | `--quiet`, `-q` | Disable log mirroring (forces verbosity 0). |
 | `--progress-interval N`, `-p N` | Print a progress log entry every N chunks per rank. |
-| `--tui-log-view` / `--no-tui-log-view` | Opt into (or out of) the post-prompt ncurses pane that streams MPI logs. |
+| `--tui-log-view` / `--no-tui-log-view` | Controls the post-prompt ncurses pane that streams MPI logs (auto-enabled when `--tui`; auto mode hides chunk/progress noise, passing `--tui-log-view` explicitly keeps the full stream). |
 
 ## Execution Flow
 
@@ -113,6 +113,8 @@ The `deepseek_wrapper` binary has its own CLI; highlights:
 | `--np N` | MPI ranks per prompt (default `2`). |
 | `--binary PATH` | Path to `deepseek_mpi` (default `./src/deepseek_mpi`). |
 | `--response-dir DIR` | Where to store per-chunk responses (default `responses/`). |
+| `--log-file PATH` | Override the `deepseek_mpi` log file (alias `--log`). |
+| `--verbose` | Increase console verbosity for the wrapped `deepseek_mpi` process (repeatable). |
 | `--auto-scale-mode MODE` | Same semantics as the core autoscale mode, but threads mode actually bumps `mpirun -np`. |
 | `--auto-scale-threshold BYTES` | Payload size that triggers autoscaling. |
 | `--auto-scale-factor N` | Multiplier for tasks/ranks. |

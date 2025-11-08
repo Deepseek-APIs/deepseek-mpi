@@ -68,7 +68,7 @@ mpirun -np 4 ./src/deepseek_mpi \
   --api-provider deepseek
 ```
 
-Type your prompt in the ncurses window and finish with a single `.` on its own line. Logs (or `-vv` HTTP traces) print directly on stdout once the prompt window closes; add `--tui-log-view` if you prefer the old split-pane log view.
+Type your prompt in the ncurses window and finish with a single `.` on its own line. Logs (or `-vv` HTTP traces) stay inside the ncurses pane by default with chunk/progress chatter muted; add `--no-tui-log-view` for the raw stdout stream or pass `--tui-log-view` explicitly if you want the full log flood.
 
 Common flag combos:
 
@@ -93,6 +93,7 @@ For an ncurses-driven experience that shells out to MPI per prompt:
 
 - Slash commands (`/np`, `/tasks`, `/chunk`, `/dry-run`, `/attach`) mirror CLI flags.
 - Attachments are base64-encoded if binary; text attachments append inline (with `[truncated]` markers when >16 KB).
+- Add `--log-file /var/log/deepseek_ranks.log` (alias `--log`) to redirect the MPI logs and repeat `--verbose` if you need more console detail from each run.
 
 ## 5. Validate with Tests
 

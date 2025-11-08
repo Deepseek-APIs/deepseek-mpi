@@ -182,6 +182,9 @@ static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *p
   } else if (config->input_text) {
     logger_log(logger, LOG_LEVEL_INFO, "Using inline text payload");
     rc = duplicate_text(config->input_text, payload, &error);
+  } else if (config->use_tui && config->repl_mode) {
+    logger_log(logger, LOG_LEVEL_INFO, "Launching REPL TUI to capture prompt");
+    rc = tui_capture_repl_payload(config, &payload->data, &payload->length, &error);
   } else if (config->use_tui) {
     logger_log(logger, LOG_LEVEL_INFO, "Launching ncurses TUI to capture payload");
     rc = tui_capture_payload(config, &payload->data, &payload->length, &error);
@@ -700,7 +703,39 @@ static int execute_payload(ProgramConfig *config, Logger *logger, Payload *paylo
   return 0;
 }
 
-static int run_repl_session(ProgramConfig *config, Logger *logger) {
+static bool g_tui_log_from_repl = false;
+
+static bool start_tui_log_view_if_needed(ProgramConfig *config, Logger *logger, bool *tui_log_active) {
+  if (!config || !logger || !tui_log_active) {
+    return false;
+  }
+  if (*tui_log_active) {
+    return true;
+  }
+  if (config->use_tui && config->repl_mode) {
+    if (tui_repl_attach_logger(logger)) {
+      tui_log_set_quiet(!config->tui_log_view_explicit);
+      *tui_log_active = true;
+      g_tui_log_from_repl = true;
+      return true;
+    }
+  }
+  if (config->rank != 0 || !config->use_tui || !config->use_tui_log_view) {
+    return false;
+  }
+  if (tui_log_view_start() == 0) {
+    tui_log_set_quiet(!config->tui_log_view_explicit);
+    logger_set_sink(logger, tui_logger_sink, NULL);
+    logger->mirror_stdout = false;
+    *tui_log_active = true;
+    g_tui_log_from_repl = false;
+  } else {
+    logger_log(logger, LOG_LEVEL_WARN, "Unable to initialize TUI log view; falling back to stdout logs");
+  }
+  return *tui_log_active;
+}
+
+static int run_repl_session(ProgramConfig *config, Logger *logger, bool *tui_log_active) {
   if (!config || !logger) {
     return -1;
   }
@@ -748,6 +783,9 @@ static int run_repl_session(ProgramConfig *config, Logger *logger) {
     if (config->rank == 0) {
       sb_init(&repl_response);
     }
+    if (config->rank == 0) {
+      start_tui_log_view_if_needed(config, logger, tui_log_active);
+    }
     int exec_rc = execute_payload(config, logger, &composite, config->rank == 0 ? &repl_response : NULL);
 
     if (config->rank == 0) {
@@ -756,8 +794,11 @@ static int run_repl_session(ProgramConfig *config, Logger *logger) {
       if (exec_rc == 0 && repl_response.length > 0 && repl_response.data) {
         sb_append_printf(&history, "Assistant #%zu:\n%.*s\n\n", turn,
                          (int) repl_response.length, repl_response.data);
+        tui_repl_append_assistant(turn, repl_response.data, repl_response.length);
       } else {
-        sb_append_printf(&history, "Assistant #%zu:\n(no response available)\n\n", turn);
+        const char *fallback = "(no response available)";
+        sb_append_printf(&history, "Assistant #%zu:\n%s\n\n", turn, fallback);
+        tui_repl_append_assistant(turn, fallback, strlen(fallback));
       }
       sb_clean(&repl_response);
     }
@@ -768,6 +809,9 @@ static int run_repl_session(ProgramConfig *config, Logger *logger) {
     turn++;
   }
   sb_clean(&history);
+  if (config->rank == 0 && config->use_tui && config->repl_mode) {
+    tui_repl_shutdown();
+  }
   return 0;
 }
 
@@ -812,20 +856,15 @@ int main(int argc, char **argv) {
   if (suppress_nonroot_stdout) {
     logger.mirror_stdout = false;
   }
-
-  bool tui_log_active = false;
-  if (config.rank == 0 && config.use_tui && config.use_tui_log_view) {
-    if (tui_log_view_start() == 0) {
-      logger_set_sink(&logger, tui_logger_sink, NULL);
-      logger.mirror_stdout = false;
-      tui_log_active = true;
-    } else {
-      logger_log(&logger, LOG_LEVEL_WARN, "Unable to initialize TUI log view; falling back to stdout logs");
-    }
+  bool quiet_root_tui = (rank == 0 && config.use_tui && config.use_tui_log_view);
+  if (quiet_root_tui) {
+    logger.mirror_stdout = false;
   }
 
+  bool tui_log_active = false;
+
   if (config.repl_mode) {
-    run_repl_session(&config, &logger);
+    run_repl_session(&config, &logger, &tui_log_active);
   } else {
     Payload payload = {0};
     int ready = 0;
@@ -833,6 +872,7 @@ int main(int argc, char **argv) {
       ready = (gather_payload_root(&config, &logger, &payload) == 0) ? 1 : 0;
     }
     if (ready) {
+      start_tui_log_view_if_needed(&config, &logger, &tui_log_active);
       execute_payload(&config, &logger, &payload, NULL);
     } else {
       logger_log(&logger, LOG_LEVEL_ERROR, "Aborting because root rank failed to prepare payload");
@@ -847,7 +887,10 @@ int main(int argc, char **argv) {
   if (tui_log_active) {
     logger_set_sink(&logger, NULL, NULL);
     logger.mirror_stdout = logger_mirror_initial;
-    tui_log_view_stop();
+    if (!g_tui_log_from_repl) {
+      tui_log_view_stop();
+    }
+    g_tui_log_from_repl = false;
   }
 
   logger_log(&logger, LOG_LEVEL_INFO, "Rank %d complete", rank);

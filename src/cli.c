@@ -71,7 +71,7 @@ static void print_help(const char *prog) {
        "  --network-retries N        MPI-level client resets after network failures\n"
        "  --readline / --no-readline  Toggle GNU Readline prompt when TUI is disabled\n"
        "  --repl                    Keep an interactive REPL session inside deepseek_mpi\n"
-       "  --tui-log-view / --no-tui-log-view  Show MPI logs in a curses pane after prompt capture\n"
+       "  --tui-log-view / --no-tui-log-view  Control the post-prompt curses log pane (auto-on with --tui)\n"
        "  --tui / --no-tui           Toggle ncurses interface\n"
        "  --dry-run                  Skip HTTP calls (for smoke tests)\n"
        "  --verbose / --quiet        Adjust console verbosity\n"
@@ -426,9 +426,11 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       break;
     case OPT_TUI_LOG_VIEW_ON:
       config->use_tui_log_view = true;
+      config->tui_log_view_explicit = true;
       break;
     case OPT_TUI_LOG_VIEW_OFF:
       config->use_tui_log_view = false;
+      config->tui_log_view_explicit = true;
       break;
     case OPT_SHOW_PROGRESS:
       config->show_progress = true;

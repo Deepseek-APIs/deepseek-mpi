@@ -252,6 +252,7 @@ ProgramConfig config_defaults(void) {
   cfg.use_tui = true;
   cfg.use_readline_prompt = true;
   cfg.use_tui_log_view = false;
+  cfg.tui_log_view_explicit = false;
   cfg.dry_run = false;
   cfg.allow_file_prompt = true;
   cfg.use_stdin = false;
@@ -318,6 +319,7 @@ void config_free(ProgramConfig *config) {
   config->provider = API_PROVIDER_DEEPSEEK;
   config->use_readline_prompt = true;
   config->use_tui_log_view = false;
+  config->tui_log_view_explicit = false;
   config->repl_mode = false;
   config->auto_scale_mode = AUTOSCALE_MODE_NONE;
   config->auto_scale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
@@ -501,6 +503,7 @@ int config_apply_kv(ProgramConfig *config, const char *key, const char *value, c
       return -1;
     }
     config->use_tui_log_view = enabled;
+    config->tui_log_view_explicit = true;
   } else if (strcmp(key, "model") == 0) {
     config_replace_string(&config->model, val);
   } else if (strcmp(key, "anthropic_version") == 0) {
@@ -713,5 +716,9 @@ void config_finalize(ProgramConfig *config) {
   }
   if (config->auto_scale_mode < AUTOSCALE_MODE_NONE || config->auto_scale_mode > AUTOSCALE_MODE_CHUNKS) {
     config->auto_scale_mode = AUTOSCALE_MODE_NONE;
+  }
+  bool tui_input_selected = config->use_tui && !config->input_file && !config->use_stdin && !config->input_text;
+  if (tui_input_selected && !config->tui_log_view_explicit) {
+    config->use_tui_log_view = true;
   }
 }
