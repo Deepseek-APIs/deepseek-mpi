@@ -41,7 +41,6 @@ When debugging, run `./src/deepseek_mpi --verbosity 2` to see the resolved confi
 | Use TUI | `true` | Disable via `--no-tui` or `use_tui=false`. |
 | Use Readline | `true` | When the TUI is disabled, fallback to GNU Readline. |
 | TUI log view | `false` | Enable with `--tui-log-view` to stream logs in a curses pane after input. |
-| Pause on exit | `false` | Enable with `--wait-exit` if you want a “Press Enter” prompt at the end. |
 | Dry run | `false` | No HTTP requests when enabled. |
 
 ## Config Files
@@ -51,7 +50,7 @@ Config files are plain `key=value` documents processed before CLI flags. Support
 - Endpoint & auth: `api_endpoint`, `api_key_env`, `api_key`, `api_provider` (`deepseek`, `openai`, `anthropic`, `zai`), `model`, `anthropic_version`.
 - Chunking & limits: `chunk_size`, `max_request_bytes`, `tasks`, `auto_scale_mode`, `auto_scale_threshold`, `auto_scale_factor`.
 - Reliability: `max_retries`, `network_retries`, `retry_delay_ms`, `timeout`.
-- Logging & UX: `log_file`, `response_dir`, `progress_interval`, `verbosity`, `show_progress`, `use_tui`, `tui_log_view`, `pause_on_exit`, `dry_run`, `force_quiet`.
+- Logging & UX: `log_file`, `response_dir`, `progress_interval`, `verbosity`, `show_progress`, `use_tui`, `tui_log_view`, `dry_run`, `force_quiet`.
 - Inputs: `input_file`, `inline_text`, `use_stdin`, `allow_file_prompt`.
 
 Example (`config/production.conf`):

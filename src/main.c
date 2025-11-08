@@ -32,7 +32,6 @@ typedef struct {
 static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *payload, Logger *logger);
 static void maybe_autoscale_payload(ProgramConfig *config, const Payload *payload, Logger *logger);
 static int ensure_input_file_available(ProgramConfig *config, Logger *logger);
-static void pause_before_exit(const ProgramConfig *config, Logger *logger);
 
 static void assign_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
@@ -365,29 +364,6 @@ static void persist_response_to_disk(const ProgramConfig *config, Logger *logger
   fclose(fp);
   logger_log(logger, LOG_LEVEL_DEBUG, "Persisted response for chunk %zu to %s", chunk_index, path);
   free(path);
-}
-
-static void pause_before_exit(const ProgramConfig *config, Logger *logger) {
-  if (!config || !logger) {
-    return;
-  }
-  if (!config->pause_on_exit) {
-    return;
-  }
-  FILE *stream = fopen("/dev/tty", "r");
-  if (!stream) {
-    stream = stdin;
-  }
-  if (!stream) {
-    return;
-  }
-  logger_log(logger, LOG_LEVEL_INFO, "Press Enter to exit...");
-  int ch;
-  while ((ch = fgetc(stream)) != '\n' && ch != EOF) {
-  }
-  if (stream != stdin) {
-    fclose(stream);
-  }
 }
 
 static void log_response_preview(const ProgramConfig *config, Logger *logger, size_t chunk_index,
@@ -875,9 +851,6 @@ int main(int argc, char **argv) {
   }
 
   logger_log(&logger, LOG_LEVEL_INFO, "Rank %d complete", rank);
-  if (rank == 0) {
-    pause_before_exit(&config, &logger);
-  }
   logger_close(&logger);
   config_free(&config);
   MPI_Finalize();

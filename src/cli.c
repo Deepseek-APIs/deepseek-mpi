@@ -23,8 +23,6 @@ enum {
   OPT_RESPONSE_DIR,
   OPT_RESPONSE_FILES_ON,
   OPT_RESPONSE_FILES_OFF,
-  OPT_WAIT_EXIT_ON,
-  OPT_WAIT_EXIT_OFF,
   OPT_TASKS,
   OPT_API_PROVIDER,
   OPT_MAX_OUTPUT_TOKENS,
@@ -59,7 +57,6 @@ static void print_help(const char *prog) {
        "  --log-file PATH            Redirect log output\n"
        "  --response-dir DIR         Persist each chunk response as JSON\n"
        "  --response-files / --no-response-files  Toggle per-rank response file emission (default on)\n"
-       "  --wait-exit / --no-wait-exit  Pause on exit so you can review logs (default on for TTY)\n"
        "  --tasks N                  Desired task count (auto chunking across MPI ranks)\n"
        "  --auto-scale-threshold BYTES  Trigger size for automatic scaling (default 100MB)\n"
        "  --auto-scale-mode MODE      Autoscale strategy: none, threads, chunks\n"
@@ -215,8 +212,6 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"response-dir", required_argument, NULL, OPT_RESPONSE_DIR},
       {"response-files", no_argument, NULL, OPT_RESPONSE_FILES_ON},
       {"no-response-files", no_argument, NULL, OPT_RESPONSE_FILES_OFF},
-      {"wait-exit", no_argument, NULL, OPT_WAIT_EXIT_ON},
-      {"no-wait-exit", no_argument, NULL, OPT_WAIT_EXIT_OFF},
       {"tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_ON},
       {"no-tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_OFF},
       {"tasks", required_argument, NULL, OPT_TASKS},
@@ -322,12 +317,6 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       break;
     case OPT_RESPONSE_FILES_OFF:
       config->response_files_enabled = false;
-      break;
-    case OPT_WAIT_EXIT_ON:
-      config->pause_on_exit = true;
-      break;
-    case OPT_WAIT_EXIT_OFF:
-      config->pause_on_exit = false;
       break;
     case OPT_TASKS: {
       size_t value;

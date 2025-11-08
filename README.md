@@ -84,7 +84,6 @@ open doc/html/index.html
 - `--dry-run` skips HTTP calls but keeps MPI plumbing and logging
 - `--response-dir responses/` streams each chunk response into timestamp-free JSON files per rank
 - `--response-files / --no-response-files` toggle per-rank response files (default enabled with directory `responses/`)
-- `--wait-exit / --no-wait-exit` pause on completion so you can read the MPI logs before the ranks tear down (default on when attached to a TTY)
 - `--readline / --no-readline` choose between GNU Readline prompts or plain stdin when the ncurses TUI is disabled
 - `--tui-log-view / --no-tui-log-view` opt into the post-prompt ncurses log pane (default off; logs print below the prompt)
 - `deepseek_wrapper --np 4` opens a chat-style interface and shells out to `mpirun` for every prompt
@@ -102,7 +101,6 @@ Combine options freely; every flag is also available from a simple key/value con
 - Logs default to `deepseek_mpi.log` in the working directory; rotate externally if desired.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
 - Response files are enabled by default (saved under `responses/` per rank/chunk). Disable with `--no-response-files` if you only want log output.
-- Want a pause at the end to review logs? Add `--wait-exit`; otherwise runs finish immediately after logging the summary.
 - `--tasks` ensures the entire file (including large spreadsheets) is read once and then auto-sliced, so you’re never limited by the number of hardware threads on the box.
 - Autoscaling keeps big drops moving: chunk mode divides payloads across existing ranks, while wrapper `--auto-scale-mode threads` multiplies the MPI rank count on the fly when a prompt crosses your size threshold.
 - Provider detection is automatic: endpoints, environment variable names, and well-known key prefixes (Anthropic `sk-ant-`, GLM `gk-`/`glm-`, Azure OpenAI `sk-aoai-`/`sk-az-`, etc.) steer the client toward the right REST API. Explicitly set `--api-provider` if you need to override the heuristic.

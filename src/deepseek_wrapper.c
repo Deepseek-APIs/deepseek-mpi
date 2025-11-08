@@ -693,7 +693,6 @@ static int build_command(const WrapperConfig *cfg, const char *payload_path, cha
   if (cfg->dry_run) {
     argv[idx++] = "--dry-run";
   }
-  argv[idx++] = "--no-wait-exit";
   argv[idx] = NULL;
   return 0;
 }
