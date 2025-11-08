@@ -303,6 +303,68 @@ static void log_response_preview(const ProgramConfig *config, Logger *logger, si
   }
 }
 
+static void stream_responses_after_completion(const ProgramConfig *config, Logger *logger,
+                                              StringBuffer *response_stream, bool stream_enabled) {
+  if (!stream_enabled || !config || !logger || !response_stream) {
+    return;
+  }
+  const int TAG_LEN = 0x5a1;
+  const int TAG_DATA = 0x5a2;
+  unsigned long long local_len = (unsigned long long) response_stream->length;
+
+  if (config->world_size == 1) {
+    if (local_len > 0 && response_stream->data) {
+      logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses =====\n%.*s\n",
+                 (int) response_stream->length, response_stream->data);
+    }
+    return;
+  }
+
+  if (config->rank == 0) {
+    if (local_len > 0 && response_stream->data) {
+      logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses from rank 0 =====\n%.*s",
+                 (int) response_stream->length, response_stream->data);
+    }
+    for (int source = 1; source < config->world_size; ++source) {
+      unsigned long long incoming = 0;
+      MPI_Recv(&incoming, 1, MPI_UNSIGNED_LONG_LONG, source, TAG_LEN, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+      if (incoming == 0) {
+        continue;
+      }
+      char *buffer = malloc((size_t) incoming + 1);
+      if (!buffer) {
+        logger_log(logger, LOG_LEVEL_WARN, "Rank 0 cannot allocate %llu bytes to stream responses from rank %d",
+                   incoming, source);
+        size_t remaining = (size_t) incoming;
+        char discard[4096];
+        while (remaining > 0) {
+          int chunk = remaining > (size_t) sizeof discard ? (int) sizeof discard : (int) remaining;
+          MPI_Recv(discard, chunk, MPI_CHAR, source, TAG_DATA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+          remaining -= (size_t) chunk;
+        }
+        continue;
+      }
+      size_t received = 0;
+      while (received < incoming) {
+        int chunk = (incoming - received) > INT_MAX ? INT_MAX : (int) (incoming - received);
+        MPI_Recv(buffer + received, chunk, MPI_CHAR, source, TAG_DATA, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        received += (size_t) chunk;
+      }
+      buffer[incoming] = '\0';
+      logger_log(logger, LOG_LEVEL_INFO, "\n===== Responses from rank %d =====\n%s", source, buffer);
+      free(buffer);
+    }
+  } else {
+    MPI_Send(&local_len, 1, MPI_UNSIGNED_LONG_LONG, 0, TAG_LEN, MPI_COMM_WORLD);
+    size_t sent = 0;
+    while (sent < response_stream->length) {
+      int chunk = (response_stream->length - sent) > INT_MAX ? INT_MAX : (int) (response_stream->length - sent);
+      MPI_Send(response_stream->data + sent, chunk, MPI_CHAR, 0, TAG_DATA, MPI_COMM_WORLD);
+      sent += (size_t) chunk;
+    }
+  }
+}
+
 static void process_chunks(const ProgramConfig *config, Logger *logger, const Payload *payload) {
   if (!config || !payload) {
     return;
@@ -323,6 +385,12 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
   if (client_ready) {
     sb_init(&response);
     response_ready = true;
+  }
+
+  StringBuffer response_stream;
+  bool stream_enabled = response_ready;
+  if (stream_enabled) {
+    sb_init(&response_stream);
   }
 
   size_t processed = 0;
@@ -351,6 +419,11 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
         if (response_ready) {
           persist_response_to_disk(config, logger, chunk_index, &response);
           log_response_preview(config, logger, chunk_index, &response);
+          sb_append_printf(&response_stream, "----- chunk %zu (rank %d) -----\n", chunk_index, config->rank);
+          if (response.length > 0 && response.data) {
+            sb_append(&response_stream, response.data, response.length);
+          }
+          sb_append_str(&response_stream, "\n\n");
         }
         chunk_done = true;
         free(error);
@@ -415,6 +488,10 @@ static void process_chunks(const ProgramConfig *config, Logger *logger, const Pa
   if (response_ready) {
     sb_clean(&response);
   }
+  if (stream_enabled) {
+    stream_responses_after_completion(config, logger, &response_stream, stream_enabled);
+    sb_clean(&response_stream);
+  }
   if (client_ready) {
     api_client_cleanup(&client);
   }
@@ -454,6 +531,10 @@ int main(int argc, char **argv) {
   } else {
     logger_log(&logger, LOG_LEVEL_INFO, "deepseek-mpi %s starting on rank %d/%d", deepseek_get_version(), rank,
                world_size);
+  }
+  bool logger_mirror_initial = logger.mirror_stdout;
+  if (config.use_tui && world_size > 1 && rank != 0) {
+    logger.mirror_stdout = false;
   }
 
   Payload payload = {0};
@@ -509,7 +590,6 @@ int main(int argc, char **argv) {
 
   Payload shared_payload = {shared_buffer, payload_len};
   bool tui_log_active = false;
-  bool original_mirror = logger.mirror_stdout;
   if (config.rank == 0 && config.use_tui) {
     if (tui_log_view_start() == 0) {
       logger_set_sink(&logger, tui_logger_sink, NULL);
@@ -524,7 +604,7 @@ int main(int argc, char **argv) {
 
   if (tui_log_active) {
     logger_set_sink(&logger, NULL, NULL);
-    logger.mirror_stdout = original_mirror;
+    logger.mirror_stdout = logger_mirror_initial;
     tui_log_view_stop();
   }
 
