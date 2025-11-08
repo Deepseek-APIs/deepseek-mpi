@@ -61,11 +61,16 @@ int readline_capture_payload(ProgramConfig *config, char **output, size_t *outpu
 
   StringBuffer buffer;
   sb_init(&buffer);
+  int interactive = isatty(STDIN_FILENO);
 
   while (1) {
-    char *line = readline(isatty(STDIN_FILENO) ? "DeepSeek MPI> " : NULL);
+    char *line = readline(interactive ? "DeepSeek MPI> " : NULL);
     if (!line) {
       break;
+    }
+    if (interactive) {
+      fputs("\r\033[K", stdout);
+      fflush(stdout);
     }
     if (strcmp(line, ".") == 0) {
       free(line);
