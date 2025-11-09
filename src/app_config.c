@@ -250,6 +250,7 @@ ProgramConfig config_defaults(void) {
 
   cfg.show_progress = true;
   cfg.use_tui = true;
+  cfg.noninteractive_mode = false;
   cfg.use_readline_prompt = true;
   cfg.use_tui_log_view = false;
   cfg.tui_log_view_explicit = false;
@@ -317,6 +318,7 @@ void config_free(ProgramConfig *config) {
   config->target_tasks_set = false;
   config->max_output_tokens = AI_DEFAULT_MAX_OUTPUT_TOKENS;
   config->provider = API_PROVIDER_DEEPSEEK;
+  config->noninteractive_mode = false;
   config->use_readline_prompt = true;
   config->use_tui_log_view = false;
   config->tui_log_view_explicit = false;

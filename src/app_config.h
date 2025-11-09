@@ -52,6 +52,7 @@ typedef struct {
 
   bool show_progress;
   bool use_tui;
+  bool noninteractive_mode;
   bool use_readline_prompt;
   bool use_tui_log_view;
   bool tui_log_view_explicit;

@@ -322,6 +322,37 @@ static void repl_ui_update_prompt_input(const char *text, int cursor_col) {
   wrefresh(repl_ui.inwin);
 }
 
+static void tui_edit_insert_char(char *text, size_t capacity, int *len, int *cursor, char ch) {
+  if (!text || !len || !cursor || capacity == 0) {
+    return;
+  }
+  if (*len >= (int) capacity - 1) {
+    return;
+  }
+  if (*cursor < 0) {
+    *cursor = 0;
+  }
+  if (*cursor > *len) {
+    *cursor = *len;
+  }
+  memmove(text + *cursor + 1, text + *cursor, (size_t) (*len - *cursor + 1));
+  text[*cursor] = ch;
+  (*cursor)++;
+  (*len)++;
+}
+
+static void tui_edit_backspace_char(char *text, int *len, int *cursor) {
+  if (!text || !len || !cursor) {
+    return;
+  }
+  if (*cursor <= 0 || *len <= 0) {
+    return;
+  }
+  memmove(text + *cursor - 1, text + *cursor, (size_t) (*len - *cursor + 1));
+  (*cursor)--;
+  (*len)--;
+}
+
 static void repl_ui_set_focus(bool focus_file) {
   repl_ui.focus_on_file = focus_file;
   repl_ui_draw_field_frame(repl_ui.file_frame, " Upload File ", focus_file);
@@ -821,12 +852,14 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
   sb_init(&buffer);
   char prompt_line[2048];
   memset(prompt_line, 0, sizeof prompt_line);
-  int prompt_pos = 0;
+  int prompt_len = 0;
+  int prompt_cursor = 0;
   char file_line[PATH_MAX];
   memset(file_line, 0, sizeof file_line);
-  int file_pos = 0;
-  repl_ui_update_file_input(file_line, file_pos);
-  repl_ui_update_prompt_input(prompt_line, prompt_pos);
+  int file_len = 0;
+  int file_cursor = 0;
+  repl_ui_update_file_input(file_line, file_cursor);
+  repl_ui_update_prompt_input(prompt_line, prompt_cursor);
   repl_ui_set_focus(false);
 
   const int CTRL_SEND_KEY = CTRL('K');
@@ -836,57 +869,90 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
     int ch = wgetch(active);
     if (ch == KEY_RESIZE) {
       repl_ui_handle_resize();
-      prompt_pos = (int) strlen(prompt_line);
-      file_pos = (int) strlen(file_line);
-      repl_ui_update_file_input(file_line, file_pos);
-      repl_ui_update_prompt_input(prompt_line, prompt_pos);
+      prompt_len = (int) strlen(prompt_line);
+      if (prompt_cursor > prompt_len) {
+        prompt_cursor = prompt_len;
+      }
+      file_len = (int) strlen(file_line);
+      if (file_cursor > file_len) {
+        file_cursor = file_len;
+      }
+      repl_ui_update_file_input(file_line, file_cursor);
+      repl_ui_update_prompt_input(prompt_line, prompt_cursor);
       repl_ui_set_focus(repl_ui.focus_on_file);
       continue;
     }
     if (tui_abort_flag) {
       tui_abort_flag = 0;
       if (repl_ui.focus_on_file) {
-        file_pos = 0;
+        file_len = 0;
+        file_cursor = 0;
         file_line[0] = '\0';
-        repl_ui_update_file_input(file_line, file_pos);
+        repl_ui_update_file_input(file_line, file_cursor);
       } else {
-        prompt_pos = 0;
+        prompt_len = 0;
+        prompt_cursor = 0;
         prompt_line[0] = '\0';
-        repl_ui_update_prompt_input(prompt_line, prompt_pos);
+        repl_ui_update_prompt_input(prompt_line, prompt_cursor);
       }
       continue;
     }
     if (ch == '\t' || ch == KEY_BTAB) {
       bool next = !repl_ui.focus_on_file;
       repl_ui_set_focus(next);
-      repl_ui_update_file_input(file_line, file_pos);
-      repl_ui_update_prompt_input(prompt_line, prompt_pos);
+      repl_ui_update_file_input(file_line, file_cursor);
+      repl_ui_update_prompt_input(prompt_line, prompt_cursor);
       continue;
     }
     if (repl_ui.focus_on_file) {
       if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
-        if (file_pos > 0) {
-          file_pos--;
-          file_line[file_pos] = '\0';
-          repl_ui_update_file_input(file_line, file_pos);
+        tui_edit_backspace_char(file_line, &file_len, &file_cursor);
+        repl_ui_update_file_input(file_line, file_cursor);
+        continue;
+      }
+      if (ch == KEY_LEFT) {
+        if (file_cursor > 0) {
+          file_cursor--;
+          repl_ui_update_file_input(file_line, file_cursor);
+        }
+        continue;
+      }
+      if (ch == KEY_RIGHT) {
+        if (file_cursor < file_len) {
+          file_cursor++;
+          repl_ui_update_file_input(file_line, file_cursor);
+        }
+        continue;
+      }
+      if (ch == KEY_HOME) {
+        if (file_cursor != 0) {
+          file_cursor = 0;
+          repl_ui_update_file_input(file_line, file_cursor);
+        }
+        continue;
+      }
+      if (ch == KEY_END) {
+        if (file_cursor != file_len) {
+          file_cursor = file_len;
+          repl_ui_update_file_input(file_line, file_cursor);
         }
         continue;
       }
       if (ch == '\r' || ch == '\n' || ch == KEY_ENTER) {
-        file_line[file_pos] = '\0';
-        if (file_pos > 0) {
+        file_line[file_len] = '\0';
+        if (file_len > 0) {
           char *file_data = NULL;
           char *file_err = NULL;
-          size_t file_len = 0;
-          if (file_loader_read_all(file_line, &file_data, &file_len, &file_err) == 0) {
-            if (file_data && file_len > 0) {
-              sb_append(&buffer, file_data, file_len);
-              if (file_data[file_len - 1] != '\n') {
+          size_t loaded_len = 0;
+          if (file_loader_read_all(file_line, &file_data, &loaded_len, &file_err) == 0) {
+            if (file_data && loaded_len > 0) {
+              sb_append(&buffer, file_data, loaded_len);
+              if (file_data[loaded_len - 1] != '\n') {
                 sb_append_char(&buffer, '\n');
               }
             }
             char note[256];
-            snprintf(note, sizeof note, "[Loaded %s (%zu bytes)]", file_line, file_len);
+            snprintf(note, sizeof note, "[Loaded %s (%zu bytes)]", file_line, loaded_len);
             repl_ui_print_line(note);
             free(file_data);
           } else {
@@ -894,51 +960,78 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
             free(file_err);
           }
         }
-        file_pos = 0;
+        file_len = 0;
+        file_cursor = 0;
         file_line[0] = '\0';
-        repl_ui_update_file_input(file_line, file_pos);
+        repl_ui_update_file_input(file_line, file_cursor);
         continue;
       }
       if (ch == ERR) {
         continue;
       }
-      if (isprint(ch) && file_pos < (int) sizeof(file_line) - 1) {
-        file_line[file_pos++] = (char) ch;
-        file_line[file_pos] = '\0';
-        repl_ui_update_file_input(file_line, file_pos);
+      if (isprint(ch) && file_len < (int) sizeof(file_line) - 1) {
+        tui_edit_insert_char(file_line, sizeof(file_line), &file_len, &file_cursor, (char) ch);
+        repl_ui_update_file_input(file_line, file_cursor);
       }
       continue;
     }
 
     if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
-      if (prompt_pos > 0) {
-        prompt_pos--;
-        prompt_line[prompt_pos] = '\0';
-        repl_ui_update_prompt_input(prompt_line, prompt_pos);
+      tui_edit_backspace_char(prompt_line, &prompt_len, &prompt_cursor);
+      repl_ui_update_prompt_input(prompt_line, prompt_cursor);
+      continue;
+    }
+    if (ch == KEY_LEFT) {
+      if (prompt_cursor > 0) {
+        prompt_cursor--;
+        repl_ui_update_prompt_input(prompt_line, prompt_cursor);
+      }
+      continue;
+    }
+    if (ch == KEY_RIGHT) {
+      if (prompt_cursor < prompt_len) {
+        prompt_cursor++;
+        repl_ui_update_prompt_input(prompt_line, prompt_cursor);
+      }
+      continue;
+    }
+    if (ch == KEY_HOME) {
+      if (prompt_cursor != 0) {
+        prompt_cursor = 0;
+        repl_ui_update_prompt_input(prompt_line, prompt_cursor);
+      }
+      continue;
+    }
+    if (ch == KEY_END) {
+      if (prompt_cursor != prompt_len) {
+        prompt_cursor = prompt_len;
+        repl_ui_update_prompt_input(prompt_line, prompt_cursor);
       }
       continue;
     }
     if (ch == CTRL_SEND_KEY) {
-      prompt_line[prompt_pos] = '\0';
-      if (prompt_pos > 0) {
+      prompt_line[prompt_len] = '\0';
+      if (prompt_len > 0) {
         sb_append_str(&buffer, prompt_line);
         sb_append_char(&buffer, '\n');
         repl_ui_print_line(prompt_line);
       }
-      prompt_pos = 0;
+      prompt_len = 0;
+      prompt_cursor = 0;
       prompt_line[0] = '\0';
-      repl_ui_update_prompt_input(prompt_line, prompt_pos);
+      repl_ui_update_prompt_input(prompt_line, prompt_cursor);
       collecting = false;
       break;
     }
     if (ch == '\r' || ch == '\n' || ch == KEY_ENTER) {
-      prompt_line[prompt_pos] = '\0';
+      prompt_line[prompt_len] = '\0';
       bool exit_requested = false;
       if (prompt_line[0] == '/' &&
           repl_ui_handle_prompt_command(prompt_line, &buffer, &exit_requested)) {
-        prompt_pos = 0;
+        prompt_len = 0;
+        prompt_cursor = 0;
         prompt_line[0] = '\0';
-        repl_ui_update_prompt_input(prompt_line, prompt_pos);
+        repl_ui_update_prompt_input(prompt_line, prompt_cursor);
         if (exit_requested) {
           collecting = false;
           break;
@@ -949,23 +1042,23 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
         collecting = false;
         break;
       }
-      if (prompt_pos > 0) {
+      if (prompt_len > 0) {
         sb_append_str(&buffer, prompt_line);
         sb_append_char(&buffer, '\n');
         repl_ui_print_line(prompt_line);
       }
-      prompt_pos = 0;
+      prompt_len = 0;
+      prompt_cursor = 0;
       prompt_line[0] = '\0';
-      repl_ui_update_prompt_input(prompt_line, prompt_pos);
+      repl_ui_update_prompt_input(prompt_line, prompt_cursor);
       continue;
     }
     if (ch == ERR) {
       continue;
     }
-    if (isprint(ch) && prompt_pos < (int) sizeof(prompt_line) - 1) {
-      prompt_line[prompt_pos++] = (char) ch;
-      prompt_line[prompt_pos] = '\0';
-      repl_ui_update_prompt_input(prompt_line, prompt_pos);
+    if (isprint(ch) && prompt_len < (int) sizeof(prompt_line) - 1) {
+      tui_edit_insert_char(prompt_line, sizeof(prompt_line), &prompt_len, &prompt_cursor, (char) ch);
+      repl_ui_update_prompt_input(prompt_line, prompt_cursor);
     }
   }
   size_t payload_len = buffer.length;
@@ -982,8 +1075,12 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
   }
   file_line[0] = '\0';
   prompt_line[0] = '\0';
-  repl_ui_update_file_input(file_line, 0);
-  repl_ui_update_prompt_input(prompt_line, 0);
+  file_len = 0;
+  file_cursor = 0;
+  prompt_len = 0;
+  prompt_cursor = 0;
+  repl_ui_update_file_input(file_line, file_cursor);
+  repl_ui_update_prompt_input(prompt_line, prompt_cursor);
   repl_ui_set_focus(false);
   *output = result;
   *output_len = payload_len;

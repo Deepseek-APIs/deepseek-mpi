@@ -35,7 +35,8 @@ enum {
   OPT_AUTOSCALE_FACTOR,
   OPT_TUI_LOG_VIEW_ON,
   OPT_TUI_LOG_VIEW_OFF,
-  OPT_REPL
+  OPT_REPL,
+  OPT_NONINTERACTIVE
 };
 
 static void print_version(void) {
@@ -71,6 +72,7 @@ static void print_help(const char *prog) {
        "  --network-retries N        MPI-level client resets after network failures\n"
        "  --readline / --no-readline  Toggle GNU Readline prompt when TUI is disabled\n"
        "  --repl                    Keep an interactive REPL session inside deepseek_mpi\n"
+       "  --noninteractive          Disable TUI/readline and require --input-file plus inline text\n"
        "  --tui-log-view / --no-tui-log-view  Control the post-prompt curses log pane (auto-on with --tui)\n"
        "  --tui / --no-tui           Toggle ncurses interface\n"
        "  --dry-run                  Skip HTTP calls (for smoke tests)\n"
@@ -222,6 +224,7 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"readline", no_argument, NULL, OPT_READLINE_ON},
       {"no-readline", no_argument, NULL, OPT_READLINE_OFF},
       {"repl", no_argument, NULL, OPT_REPL},
+      {"noninteractive", no_argument, NULL, OPT_NONINTERACTIVE},
       {"tui", no_argument, NULL, OPT_TUI},
       {"no-tui", no_argument, NULL, OPT_NO_TUI},
       {"dry-run", no_argument, NULL, OPT_DRY_RUN},
@@ -349,6 +352,11 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
     case OPT_REPL:
       config->repl_mode = true;
       break;
+    case OPT_NONINTERACTIVE:
+      config->noninteractive_mode = true;
+      config->use_tui = false;
+      config->use_readline_prompt = false;
+      break;
     case OPT_AUTOSCALE_MODE: {
       AutoScaleMode mode;
       if (config_parse_autoscale_mode(optarg, &mode) != 0) {
@@ -450,5 +458,16 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
   capture_trailing_payload(argc, argv, config);
 
   config_finalize(config);
+
+  if (config->noninteractive_mode) {
+    if (!config->input_file || config->input_file[0] == '\0') {
+      fprintf(stderr, "--noninteractive requires --input-file PATH to be specified.\n");
+      return CLI_ERROR;
+    }
+    if (!config->input_text || config->input_text[0] == '\0') {
+      fprintf(stderr, "--noninteractive requires an inline prompt. Use --inline-text or provide trailing arguments.\n");
+      return CLI_ERROR;
+    }
+  }
   return CLI_OK;
 }
