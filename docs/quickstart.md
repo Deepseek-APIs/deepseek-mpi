@@ -13,10 +13,12 @@ Follow these steps to go from zero to a working Deepseek MPI deployment on CentO
 | GCC/Clang with C11 | Compile the C sources (CentOS 7 ships GCC 4.8+). | `gcc --version` (>= 4.8) |
 | OpenMPI or MPICH | Provides `mpicc` and `mpirun` for distributed runs. | `which mpicc && mpicc --showme` |
 | libcurl + headers | HTTP client with TLS, retries, compression. | `pkg-config --modversion libcurl` |
-| ncurses + headers | TUI and wrapper UI. | `pkg-config --cflags ncurses` |
+| ncurses + headers | Rank 0 ncurses prompt (standard + REPL). | `pkg-config --cflags ncurses` |
 | GNU Readline | Interactive prompt when the TUI is disabled. | `pkg-config --modversion readline` |
 | Autotools (`autoconf`, `automake`, `libtool`, `pkg-config`) | Generates portable build files. | `autoreconf --version` |
-| Optional: `doxygen`, `libxml2`, `libmagic`, `libarchive` | API docs + richer file ingestion in `deepseek_wrapper`. | `pkg-config --list-all | grep libmagic` |
+| Doxygen (optional) | API docs (`make doc`). | `doxygen --version` |
+
+> `configure` still probes for `libmagic`, `libxml2`, and `libarchive` (they powered the retired wrapper’s attachment loader), but those probes are optional—builds continue even if the libraries are absent.
 
 Install everything on CentOS 7:
 
@@ -47,7 +49,7 @@ sudo yum install -y openmpi openmpi-devel libcurl-devel ncurses-devel \
 make -j$(nproc)
 ```
 
-Artifacts appear under `src/` (`deepseek_mpi`, `deepseek_wrapper`) and `doc/` (Doxygen output after `make doc`).
+Artifacts appear under `src/` (`deepseek_mpi`) and `doc/` (Doxygen output after `make doc`).
 
 ### Build Profiles
 
@@ -74,46 +76,30 @@ Common flag combos:
 
 - Switch providers: `--api-provider openai --model gpt-4o-mini`, `--api-provider anthropic --anthropic-version 2023-06-01`, or `--api-provider zai --model glm-4-plus`. DeepSeek’s own endpoint (`https://api.deepseek.com/chat/completions`) is OpenAI-compatible, so the default provider works as soon as you export `DEEPSEEK_API_KEY`.
 - Run from stdin: `cat payload.txt | mpirun -np 4 ./src/deepseek_mpi --stdin`.
-- Non-interactive batching: `--input-file payload.txt --no-tui --show-progress`.
+- Non-interactive batching: `--input-file payload.txt --inline-text "Summarize section 2" --noninteractive --show-progress` (fails fast if either input is missing).
 - Interactive CLI without ncurses: `--no-tui --readline` (finish with a single `.` line, just like the TUI).
 - Autoscaling large payloads: `--auto-scale-mode chunks --auto-scale-threshold 150000000 --auto-scale-factor 4`.
-- Need a pause to read logs before exiting? Add `--wait-exit`. Leave it off (default) for non-interactive or scripted runs.
 
 See the [CLI reference](cli.md) for every option.
 
-### Using the Wrapper
+### Using the REPL TUI
 
-For an ncurses-driven experience that shells out to MPI per prompt:
+`--repl` keeps `deepseek_mpi` alive between prompts and adds a split-pane UI (history + prompt/file staging):
 
 ```bash
-./src/deepseek_wrapper --np 4 --binary ./src/deepseek_mpi \
+mpirun -np 4 ./src/deepseek_mpi --repl \
   --chunk-size 4096 --response-dir responses \
-  --auto-scale-mode threads --auto-scale-threshold 150000000
+  --tui-log-view --auto-scale-mode chunks --auto-scale-threshold 150000000
 ```
 
-- Slash commands (`/np`, `/tasks`, `/chunk`, `/dry-run`, `/attach`) mirror CLI flags.
-- Attachments are base64-encoded if binary; text attachments append inline (with `[truncated]` markers when >16 KB).
-- Add `--log-file /var/log/deepseek_ranks.log` (alias `--log`) to redirect the MPI logs and repeat `--verbose` if you need more console detail from each run.
+- Press `Tab` to switch between the file-path field and the prompt; Enter on the file field loads the file and appends its contents to the pending prompt (a newline is added automatically if needed).
+- Submit the prompt with `Ctrl+K` (or the traditional lone `.` line). Use `/help` for a cheat sheet, `/clear` to wipe the staged buffer, and `/quit` to enqueue `:quit` without typing it manually.
+- `Ctrl+C` clears whichever field is focused, `:quit`/`:exit`/`:q` aborts the capture loop, and `Esc` exits the REPL entirely.
+- `--tui-log-view` mirrors the most recent MPI log window inside the REPL; disable it with `--no-tui-log-view` if you prefer raw stdout.
 
-## 5. Validate with Tests
+## 5. Validate the Build
 
-The project ships with an Automake-based unit test suite (no Boost requirement):
-
-```bash
-make check
-```
-
-This builds/runs:
-
-- `unit_core_tests` – config defaults, chunk scheduling, string buffer math, file loader.
-- `cli_tests` – flag parsing, config-file ingestion, minimum guards (chunk size, retries, network budgets).
-- `wrapper_tests` – attachment parsing and slash-command plumbing (skipped when optional libs are absent).
-
-CI-friendly: include `make check` in your pipeline to guard against regressions.
-
-### MPI Smoke Test
-
-After building, run a dry distributed test to ensure ranks can communicate:
+An automated test suite hasn’t landed yet (`tests/` is a stub), so `make check` is currently a no-op. Use the manual MPI smoke test below (or wire it into CI) to confirm chunking, MPI broadcast, and response streaming work end-to-end without calling the API.
 
 ```bash
 mpirun -np 2 ./src/deepseek_mpi --dry-run --inline-text "ping" --auto-scale-mode none
@@ -146,7 +132,6 @@ Or skip `autogen.sh` and run `autoreconf -fi` followed by the usual `configure &
 ## 8. Next Steps
 
 - Dive into the [Configuration guide](configuration.md) to tune retries, chunk sizing, providers, and config files.
-- Familiarize yourself with the [`deepseek_wrapper`](../src/deepseek_wrapper.c) if you need a Codex-style REPL.
-- Try the built-in `--repl` flag when you want to keep MPI ranks alive between prompts but prefer the stock `deepseek_mpi` interface.
+- Spend time in the built-in `--repl` UI when you want to keep MPI ranks alive between prompts while staging files inline.
 - Publish these docs on GitBook by following the [GitBook guide](gitbook.md).
 - Review the [Operations guide](operations.md) to plan logging, monitoring, and autoscaling policies before your first production rollout.

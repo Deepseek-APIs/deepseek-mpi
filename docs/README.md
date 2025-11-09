@@ -7,7 +7,7 @@ Welcome to the Deepseek MPI documentation hub. This GitBook-ready tree mirrors a
 - [Quickstart](quickstart.md) – clean-room builds, dependency setup, execution, tests, and Doxygen tips.
 - [CLI Reference](cli.md) – exhaustive flag tables with usage snippets and advanced examples.
 - [Configuration](configuration.md) – environment variables, autoscaling, response capture, and resiliency tuning.
-- [Operations](operations.md) – day‑2 guidance covering logging, troubleshooting, autoscaling strategies, and wrapper UX.
+- [Operations](operations.md) – day‑2 guidance covering logging, troubleshooting, autoscaling strategies, and the interactive REPL/TUI.
 - **New:** `--repl` mode keeps `deepseek_mpi` running between prompts so every new request contains the prior conversation (without resending raw files).
 - [GitBook Publishing](gitbook.md) – how to connect this repo to GitBook, polish the space, and keep it synced.
 
@@ -22,7 +22,7 @@ Deepseek MPI is composed of a few well-defined layers:
 | `deepseek_mpi` core | Parses CLI/config, builds payloads, slices input, and coordinates MPI ranks. |
 | `api_client` | Owns libcurl handles, retries, compression, and provider-specific payloads. |
 | `tui` / `readline_prompt` | Capture payload content interactively (ncurses or GNU Readline). |
-| `deepseek_wrapper` | Optional ncurses REPL that shells out to `mpirun` and manages attachments. |
+| `repl_ui` (inside `tui.c`) | Chat-style ncurses interface enabled by `--repl` for multi-turn prompts and file staging. |
 | `docs/` | GitBook-ready Markdown, synced directly from `main`. |
 
 Understanding these layers helps when you extend the docs—each guide can focus on a single component.

@@ -1,6 +1,6 @@
 # Operations Guide
 
-This page covers the “day‑2” tasks you’ll tackle after Deepseek MPI is deployed: observing health, tuning autoscaling, managing attachments, and troubleshooting failures across ranks.
+This page covers the “day‑2” tasks you’ll tackle after Deepseek MPI is deployed: observing health, tuning autoscaling, managing the REPL/TUI workflow, and troubleshooting failures across ranks.
 
 ## Logging & Observability
 
@@ -16,7 +16,6 @@ This page covers the “day‑2” tasks you’ll tackle after Deepseek MPI is d
 | --- | --- | --- |
 | `deepseek_mpi.log` | 7–14 days | Postmortems and usage insights. |
 | `responses/*.json` | 30–90 days (if containing user data) | Compliance/auditing; purge sooner if privacy requires. |
-| Wrapper attachments | According to your upstream policy | Attachments may include PII—treat accordingly. |
 
 ### Structured Log Fields
 
@@ -30,36 +29,42 @@ Use `logger.process_rank` and `logger.verbosity` in custom tooling if you extend
 
 ## Autoscaling Runbooks
 
-Deepseek MPI has two autoscaling layers:
-
-1. **Core autoscaling (`--auto-scale-mode`)** – modifies logical tasks/chunk sizing when payloads exceed `--auto-scale-threshold`. Modes: `none`, `chunks`, `threads` (threads mode logs guidance because rank counts are fixed once `mpirun` starts).
-2. **Wrapper autoscaling (`deepseek_wrapper`)** – can increase `mpirun -np` or task count before launching each job. Use flags `--auto-scale-mode threads --auto-scale-factor 2` plus `--auto-scale-max-np` to cap concurrency.
+Deepseek MPI’s autoscaler lives entirely inside the core binary. When `--auto-scale-mode=chunks`, rank 0 increases the logical task count (and therefore reduces each chunk’s size) once the prompt exceeds `--auto-scale-threshold`. `--auto-scale-mode=threads` simply logs a reminder that MPI ranks are fixed for the lifetime of a job—scale `mpirun -np` yourself through your scheduler or wrapper scripts when you need more concurrency.
 
 ### Sample Policy
 
 | Payload Size | Action |
 | --- | --- |
 | `<50 MB` | No change (baseline `np=4`, `tasks=16`). |
-| `50–150 MB` | Wrapper doubles task count: `--auto-scale-mode chunks --auto-scale-factor 2`. |
-| `>150 MB` | Wrapper doubles MPI ranks (if cluster capacity allows) and sets `tasks=np*2`. |
+| `50–150 MB` | Enable chunks autoscaling: `--auto-scale-mode chunks --auto-scale-factor 2`. |
+| `>150 MB` | Launch `mpirun` with a higher `-np` (e.g., 8) *and* keep chunks autoscaling enabled so the larger rank count stays busy. |
 
-Tune thresholds per workload; monitor wall-clock time per job to refine factors.
+Tune thresholds per workload; monitor wall-clock time per job to refine factors. Remember that increasing `--tasks` or enabling chunks autoscaling reduces chunk size but does not change the MPI world size—you must restart the job with a higher `-np` (via your scheduler or orchestration layer) if you need more ranks.
 
-## Wrapper UX & Attachments
+## Interactive REPL UX
 
-`deepseek_wrapper` provides a ncurses REPL plus a payload staging area.
+Run `mpirun ... ./src/deepseek_mpi --repl` when you need a chat-style workflow without leaving the main binary.
 
-- `/attach <path>` inspects the file with `libmagic` and `libarchive`. Text attachments are inlined; binary attachments are base64-encoded with metadata.
-- Slash commands: `/np`, `/tasks`, `/chunk`, `/dry-run`, `/help`, `/clear`.
-- Every prompt run spawns `mpirun -np <np> ...` and streams stdout/stderr to the “Last Output” pane, also captured to `last_output` buffer for copy/paste.
+- Tab switches focus between the file-path input and the prompt. Enter on the file field immediately reads the file (relative or absolute path) and appends its contents to the staged prompt; a newline is added automatically if the file does not end with one.
+- `Ctrl+K` submits the current prompt. The classic `.` on its own line still works when you want a quick send without leaving the keyboard home row.
+- `/help` prints the shortcut list, `/clear` wipes the staged buffer, `/quit` enqueues `:quit`, and `/np` reminds you to restart with a different `-np` if you need more ranks.
+- `Ctrl+C` clears whichever field currently has focus. Type `:quit`, `:exit`, `:q`, or press `Esc` to exit the REPL without submitting.
+- Enable `--tui-log-view` to mirror the most recent MPI logs inside the REPL window. Disable it (`--no-tui-log-view`) if you would rather stream stdout/stderr back to the shell.
 
-### Attachment Limits
+### File Staging Tips
 
-| Type | Notes |
-| --- | --- |
-| Text | First 16 KB is included inline; remainder gets a `... [truncated]` marker. |
-| Binary | Encoded entirely; beware of introducing huge base64 payloads—use chunking or store externally if >5 MB. |
-| Archives | If `libarchive` is available, `.zip`/`.tar.gz` contents are listed before encoding. |
+- Files are pasted verbatim into the pending prompt, so monitor `--max-request-bytes` (and consider `--tasks` or chunks autoscaling) before you drop enormous attachments into the REPL.
+- Use a scratch buffer if you need to merge multiple files: load each path sequentially, edit the combined prompt in-place, then hit `Ctrl+K` once you’re satisfied.
+- Remember that staged prompts live only on rank 0 until you submit—you can press `/clear` or `Ctrl+C` repeatedly without touching previously submitted history.
+
+### Signal Handling & Cancellation
+
+Rank 0’s ncurses UI traps SIGINT so it can clean up the terminal. That means `Ctrl-C` clears the active field instead of terminating the program. Practical implications:
+
+- Use `Ctrl-C` to wipe the current line, and type `:quit`, `:exit`, `:q`, or press `Esc` if you want to abandon the REPL/TUI without sending anything.
+- After you submit a prompt, `Ctrl-C` in the hosting terminal behaves like any other MPI job and stops every rank immediately. `Ctrl-\` (SIGQUIT) is still available if you need an emergency core dump.
+- For automation or headless runs, prefer `--no-tui --stdin`, `--readline`, or `--noninteractive --input-file ... --inline-text ...` so signals are delivered directly to `deepseek_mpi`.
+- If the REPL ever becomes unresponsive, kill the `mpirun` process (or send `pkill -TERM deepseek_mpi`); response files and logs are flushed incrementally, so you won’t lose completed chunks.
 
 ## Monitoring & Alerting
 
@@ -80,7 +85,6 @@ Consider piping logs into Prometheus or Datadog by tailing stdout/stderr and par
 | Immediate failure with `mpi_broadcast` errors | Mixed MPI versions between nodes | Align MPI runtime + compiler across cluster; avoid mixing OpenMPI and MPICH in the same run. |
 | HTTP 401/403 responses | Wrong API key or provider mismatch | Verify `--api-provider`/`--model` pair and the env var set via `--api-key-env`. |
 | `network_failures` climbing above zero | Flaky network or TLS MITM | Bump `--network-retries`, inspect firewall/SSL inspection devices, verify CA bundle. |
-| Wrapper attachments not showing | Missing optional libs | Install `libmagic`, `libxml2`, `libarchive` (headers + runtime). |
 | TUI crashes in non-interactive shells | Trying to run ncurses without a TTY | Use `--no-tui --readline` or `--stdin`. |
 
 ## Incident Response Template

@@ -15,13 +15,15 @@ Lowest → highest:
 3. **Environment variables**, e.g., `DEEPSEEK_API_KEY` or whatever you set via `--api-key-env`.
 4. **CLI flags**, which always override earlier values.
 
-When debugging, run `./src/deepseek_mpi --verbosity 2` to see the resolved configuration in the logs.
+When debugging, run `./src/deepseek_mpi -vv` to see the resolved configuration in the logs.
+
+If you omit `--api-provider`, the config layer auto-detects one by looking at the endpoint URL, the name of your API-key environment variable, or the API key prefix (`sk-ant-`, `sk-aoai-`, `glm-`, etc.). Explicitly pass `--api-provider` (or set `api_provider=...` in config files) when you need to override that heuristic.
 
 ## Default Values
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| API endpoint | `https://api.deepseek.com/v1/process` | Switching providers rewrites this automatically. |
+| API endpoint | `https://api.deepseek.com/chat/completions` | Switching providers rewrites this automatically. |
 | API key env var | `DEEPSEEK_API_KEY` | Switches to `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` if you change providers (unless overridden). |
 | Chunk size | `2048` bytes | Clamped by `DEEPSEEK_MIN_CHUNK_SIZE`. |
 | Max request bytes | `16384` | Guardrail for encoded payload size. |
@@ -38,7 +40,7 @@ When debugging, run `./src/deepseek_mpi --verbosity 2` to see the resolved confi
 | Autoscale factor | `2` | Doubling is a good starting point. |
 | REPL mode | `false` | Enable with `--repl` to keep MPI ranks alive between prompts. |
 | Show progress | `true` | Toggle with `--hide-progress`. |
-| Use TUI | `true` | Disable via `--no-tui` or `use_tui=false`. |
+| Use TUI | `true` | Disable via `--no-tui`, `--noninteractive`, or `use_tui=false`. |
 | Use Readline | `true` | When the TUI is disabled, fallback to GNU Readline. |
 | TUI log view | `auto (on when TUI enabled)` | Auto mode hides chunk/progress spam; disable with `--no-tui-log-view` or pass `--tui-log-view` explicitly for the full stream. |
 | Dry run | `false` | No HTTP requests when enabled. |
@@ -50,8 +52,8 @@ Config files are plain `key=value` documents processed before CLI flags. Support
 - Endpoint & auth: `api_endpoint`, `api_key_env`, `api_key`, `api_provider` (`deepseek`, `openai`, `anthropic`, `zai`), `model`, `anthropic_version`.
 - Chunking & limits: `chunk_size`, `max_request_bytes`, `tasks`, `auto_scale_mode`, `auto_scale_threshold`, `auto_scale_factor`.
 - Reliability: `max_retries`, `network_retries`, `retry_delay_ms`, `timeout`.
-- Logging & UX: `log_file`, `response_dir`, `progress_interval`, `verbosity`, `show_progress`, `use_tui`, `tui_log_view`, `pause_on_exit`, `dry_run`, `force_quiet`.
-- Inputs: `input_file`, `inline_text`, `use_stdin`, `allow_file_prompt`.
+- Logging & UX: `log_file`, `response_dir`, `response_files`, `progress_interval`, `verbosity`, `show_progress`, `use_tui`, `tui_log_view`, `dry_run`, `force_quiet`.
+- Inputs: `input_file`, `inline_text`, `use_stdin`.
 
 Example (`config/production.conf`):
 
@@ -97,7 +99,7 @@ Track the aggregated stats in the logs—rank 0 prints `processed`, `failures`,
 | --- | --- |
 | `none` | Default. Payload size does not influence tasks. |
 | `chunks` | Multiplies the logical task count (`base_tasks * auto_scale_factor`) when `payload_size >= auto_scale_threshold`. |
-| `threads` | Logs guidance because MPI ranks are fixed mid-run. Use `deepseek_wrapper` to actually scale `mpirun -np`. |
+| `threads` | Logs guidance because MPI ranks are fixed mid-run—restart `mpirun` with a higher `-np` if you need more processes. |
 
 Best practice: set `auto_scale_threshold` slightly below the payload where you notice timeouts, and start with `auto_scale_factor=2`. Combine with `--tasks` to ensure a non-zero baseline.
 
@@ -113,9 +115,9 @@ Disable persistence with `--no-response-files` (or `response_files_enabled=false
 - `log_file=/var/log/deepseek/rank.log` enables per-rank file logging; combine with `force_quiet=true` when you only want on-disk logs.
 - `progress_interval=N` throttles info logs for massive jobs (e.g., print every 100 chunks).
 
-## Attachment & Wrapper Dependencies
+## Optional Libraries
 
-If you build with `libxml2`, `libmagic`, and `libarchive`, the `deepseek_wrapper` binary can sniff and ingest more attachment types. The MPI core is happy without them; missing libraries simply disable those extras.
+`configure` still probes for `libxml2`, `libmagic`, and `libarchive` (they backed the legacy wrapper’s attachment loader). The probes are optional—if the libraries are absent the build continues with those features disabled, and the core MPI client operates normally.
 
 ## Security & Secrets
 
