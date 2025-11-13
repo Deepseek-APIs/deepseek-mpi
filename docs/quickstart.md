@@ -15,12 +15,12 @@ Follow these steps to go from zero to a working Deepseek MPI deployment on CentO
 | libcurl + headers | HTTP client with TLS, retries, compression. | `pkg-config --modversion libcurl` |
 | ncurses + headers | Rank 0 ncurses prompt (standard + REPL). | `pkg-config --cflags ncurses` |
 | GNU Readline | Interactive prompt when the TUI is disabled. | `pkg-config --modversion readline` |
-| poppler-glib | Renders PDFs for text/ OCR extraction. | `pkg-config --modversion poppler-glib` |
-| Tesseract + Leptonica | OCR fallback for image-only PDFs. | `pkg-config --modversion tesseract` |
+| poppler-glib | Renders PDF pages into bitmaps for the OCR pass. | `pkg-config --modversion poppler-glib` |
+| Tesseract + Leptonica | Performs OCR on every PDF page we ingest. | `pkg-config --modversion tesseract` |
 | Autotools (`autoconf`, `automake`, `libtool`, `pkg-config`) | Generates portable build files. | `autoreconf --version` |
 | Doxygen (optional) | API docs (`make doc`). | `doxygen --version` |
 
-> `configure` probes for `libmagic`, `libxml2`, `libarchive`, and `poppler-glib`. When available, Deepseek MPI can sniff MIME types and extract text from Office/LibreOffice documents and PDFs before they ever hit the API; without them it falls back to plain-text reads and descriptive base64, so builds still succeed.
+> `configure` probes for `libmagic`, `libxml2`, `libarchive`, `poppler-glib`, and Tesseract. When available, Deepseek MPI can sniff MIME types, unpack Office/LibreOffice documents, and OCR PDFs before they ever hit the API; without them it falls back to plain-text reads and descriptive base64, so builds still succeed.
 
 Install everything on CentOS 7:
 

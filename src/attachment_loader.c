@@ -512,57 +512,6 @@ static char *extract_pdf_text_ocr(const char *path) {
 }
 #endif
 
-#ifdef HAVE_POPPLER_GLIB
-static char *extract_pdf_text(const char *path) {
-  if (!path) {
-    return NULL;
-  }
-  GError *error = NULL;
-  char *uri = g_filename_to_uri(path, NULL, &error);
-  if (!uri) {
-    if (error) {
-      g_error_free(error);
-    }
-    return NULL;
-  }
-  PopplerDocument *doc = poppler_document_new_from_file(uri, NULL, &error);
-  g_free(uri);
-  if (!doc) {
-    if (error) {
-      g_error_free(error);
-    }
-    return NULL;
-  }
-  int pages = poppler_document_get_n_pages(doc);
-  StringBuffer sb;
-  sb_init(&sb);
-  for (int i = 0; i < pages; ++i) {
-    PopplerPage *page = poppler_document_get_page(doc, i);
-    if (!page) {
-      continue;
-    }
-    gchar *text = poppler_page_get_text(page);
-    if (text && *text) {
-      if (pages > 1) {
-        sb_append_printf(&sb, "----- Page %d -----\n", i + 1);
-      }
-      sb_append_str(&sb, text);
-      sb_append_char(&sb, '\n');
-    }
-    if (text) {
-      g_free(text);
-    }
-    g_object_unref(page);
-  }
-  g_object_unref(doc);
-  if (sb.length == 0) {
-    sb_clean(&sb);
-    return NULL;
-  }
-  return sb_detach(&sb);
-}
-#endif
-
 static int format_binary_payload(const char *path, const char *mime, const unsigned char *data, size_t len,
                                  AttachmentResult *result) {
   char *encoded = base64_encode(data, len);
@@ -620,20 +569,13 @@ int attachment_format_message(const char *path, AttachmentResult *result, char *
   const char *ext = extension_label(path);
 #endif
 
-#if defined(HAVE_POPPLER_GLIB) || defined(HAVE_TESSERACT)
+#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
   bool is_pdf = (mime && strstr(mime, "pdf"));
 #if defined(HAVE_POPPLER_GLIB) || (defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2))
-  if (!is_pdf && ext) {
-#ifdef HAVE_POPPLER_GLIB
-    if (!strcasecmp(ext, "pdf")) {
-      is_pdf = true;
-    }
-#endif
+  if (!is_pdf && ext && !strcasecmp(ext, "pdf")) {
+    is_pdf = true;
   }
 #endif
-#endif
-
-#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
   if (is_pdf) {
     char *ocr_text = extract_pdf_text_ocr(path);
     if (ocr_text) {
@@ -658,19 +600,6 @@ int attachment_format_message(const char *path, AttachmentResult *result, char *
     }
   } else if (ext && (!strcasecmp(ext, "xlsx"))) {
     char *text = extract_xlsx_text(path);
-    if (text) {
-      int rc = format_text_payload(path, mime, text, strlen(text), result);
-      free(text);
-      free(bytes);
-      free((void *) mime);
-      return rc;
-    }
-  }
-#endif
-
-#ifdef HAVE_POPPLER_GLIB
-  if (is_pdf) {
-    char *text = extract_pdf_text(path);
     if (text) {
       int rc = format_text_payload(path, mime, text, strlen(text), result);
       free(text);
@@ -735,35 +664,18 @@ int attachment_extract_text_payload(const char *path, AttachmentTextPayload *pay
 #if defined(HAVE_POPPLER_GLIB) || (defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2))
   const char *ext = extension_label(path);
 #endif
-#if defined(HAVE_POPPLER_GLIB) || defined(HAVE_TESSERACT)
+#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
   bool is_pdf = (payload->mime_label && strstr(payload->mime_label, "pdf"));
 #if defined(HAVE_POPPLER_GLIB) || (defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2))
   if (!is_pdf && ext && !strcasecmp(ext, "pdf")) {
     is_pdf = true;
   }
 #endif
-#endif
-
-#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
   if (is_pdf) {
     char *ocr_text = extract_pdf_text_ocr(path);
     if (ocr_text) {
       payload->data = ocr_text;
       payload->length = strlen(ocr_text);
-      payload->extracted_from_container = true;
-      payload->is_textual = true;
-      rc = 0;
-      goto done;
-    }
-  }
-#endif
-
-#ifdef HAVE_POPPLER_GLIB
-  if (is_pdf) {
-    char *extracted_pdf = extract_pdf_text(path);
-    if (extracted_pdf) {
-      payload->data = extracted_pdf;
-      payload->length = strlen(extracted_pdf);
       payload->extracted_from_container = true;
       payload->is_textual = true;
       rc = 0;
