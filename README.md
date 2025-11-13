@@ -123,6 +123,7 @@ Combine options freely; every flag is also available from a simple key/value con
 ### REPL File Staging
 - Press `Tab` to focus the file-path field, type an absolute/relative path, and hit Enter to append the file contents directly into the prompt buffer (a trailing newline is added automatically if the file does not end with one).
 - Large files are pasted verbatim, so be mindful of `--max-request-bytes`—break huge uploads into smaller prompts or rely on `--tasks`/`--mp` so chunking keeps up.
+- When OCRing PDFs, Deepseek MPI defaults to English; export `TESSERACT_LANG=deu` (or any trained code installed with Tesseract) before launching if you need another language.
 - The chat-style layout dedicates the top pane to prompt/response history, keeps a live REPL prompt at the bottom, and optionally mirrors the most recent MPI log window when `--tui-log-view` is active.
 
 ## License

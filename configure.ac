@@ -52,6 +52,11 @@ have_poppler=no
 PKG_CHECK_MODULES([POPPLER], [poppler-glib], [have_poppler=yes], [have_poppler=no])
 AS_IF([test "x$have_poppler" = "xyes"], [AC_DEFINE([HAVE_POPPLER_GLIB], [1], [Define if poppler-glib is available])])
 
+have_tesseract=no
+PKG_CHECK_MODULES([TESSERACT], [tesseract], [have_tesseract=yes], [have_tesseract=no])
+AS_IF([test "x$have_tesseract" = "xyes"], [AC_DEFINE([HAVE_TESSERACT], [1], [Define if Tesseract OCR is available])])
+AS_IF([test "x$have_tesseract" != "xyes"], [TESSERACT_CFLAGS=""; TESSERACT_LIBS=""])
+
 AC_ARG_WITH([doxygen], AS_HELP_STRING([--with-doxygen=PATH], [Path to doxygen binary]),
   [DOXYGEN="$withval"],
   [AC_PATH_PROG([DOXYGEN], [doxygen], [no])])
@@ -63,6 +68,8 @@ AC_SUBST([NCURSES_CFLAGS])
 AC_SUBST([NCURSES_LIBS])
 AC_SUBST([POPPLER_CFLAGS])
 AC_SUBST([POPPLER_LIBS])
+AC_SUBST([TESSERACT_CFLAGS])
+AC_SUBST([TESSERACT_LIBS])
 AC_SUBST([DOXYGEN])
 
 AC_CONFIG_FILES([

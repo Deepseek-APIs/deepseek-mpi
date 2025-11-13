@@ -5,6 +5,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
@@ -29,6 +30,15 @@
 #ifdef HAVE_POPPLER_GLIB
 #include <glib.h>
 #include <poppler.h>
+#endif
+
+#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
+#include <cairo/cairo.h>
+#endif
+
+#ifdef HAVE_TESSERACT
+#include <tesseract/baseapi.h>
+#include <leptonica/allheaders.h>
 #endif
 
 typedef enum {
@@ -354,6 +364,154 @@ static char *extract_office_like_text(const char *path, const char *ext) {
 }
 #endif
 
+#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
+typedef struct {
+  unsigned char *data;
+  size_t length;
+  size_t capacity;
+} CairoBuffer;
+
+static cairo_status_t cairo_buffer_write(void *closure, const unsigned char *data, unsigned int length) {
+  CairoBuffer *buffer = (CairoBuffer *) closure;
+  if (!buffer || !data || length == 0) {
+    return CAIRO_STATUS_SUCCESS;
+  }
+  size_t required = buffer->length + (size_t) length;
+  if (required > buffer->capacity) {
+    size_t new_cap = buffer->capacity ? buffer->capacity * 2 : 8192;
+    while (new_cap < required) {
+      new_cap *= 2;
+    }
+    unsigned char *next = realloc(buffer->data, new_cap);
+    if (!next) {
+      return CAIRO_STATUS_WRITE_ERROR;
+    }
+    buffer->data = next;
+    buffer->capacity = new_cap;
+  }
+  memcpy(buffer->data + buffer->length, data, length);
+  buffer->length += (size_t) length;
+  return CAIRO_STATUS_SUCCESS;
+}
+
+static Pix *render_pdf_page_to_pix(PopplerPage *page) {
+  if (!page) {
+    return NULL;
+  }
+  double width_pt = 0.0;
+  double height_pt = 0.0;
+  poppler_page_get_size(page, &width_pt, &height_pt);
+  if (width_pt <= 0 || height_pt <= 0) {
+    return NULL;
+  }
+  const double dpi = 200.0;
+  const double scale = dpi / 72.0;
+  const int width_px = (int) ceil(width_pt * scale);
+  const int height_px = (int) ceil(height_pt * scale);
+  if (width_px <= 0 || height_px <= 0 || width_px > 20000 || height_px > 20000) {
+    return NULL;
+  }
+  cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width_px, height_px);
+  if (!surface) {
+    return NULL;
+  }
+  cairo_t *cr = cairo_create(surface);
+  if (!cr) {
+    cairo_surface_destroy(surface);
+    return NULL;
+  }
+  cairo_scale(cr, scale, scale);
+  cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+  cairo_paint(cr);
+  poppler_page_render(page, cr);
+  cairo_destroy(cr);
+  cairo_surface_flush(surface);
+
+  CairoBuffer buffer = {0};
+  cairo_status_t status = cairo_surface_write_to_png_stream(surface, cairo_buffer_write, &buffer);
+  cairo_surface_destroy(surface);
+  if (status != CAIRO_STATUS_SUCCESS || buffer.length == 0 || !buffer.data) {
+    free(buffer.data);
+    return NULL;
+  }
+  Pix *pix = pixReadMemPng(buffer.data, buffer.length);
+  free(buffer.data);
+  return pix;
+}
+
+static char *extract_pdf_text_ocr(const char *path) {
+  if (!path) {
+    return NULL;
+  }
+  GError *error = NULL;
+  char *uri = g_filename_to_uri(path, NULL, &error);
+  if (!uri) {
+    if (error) {
+      g_error_free(error);
+    }
+    return NULL;
+  }
+  PopplerDocument *doc = poppler_document_new_from_file(uri, NULL, &error);
+  g_free(uri);
+  if (!doc) {
+    if (error) {
+      g_error_free(error);
+    }
+    return NULL;
+  }
+  TessBaseAPI *api = TessBaseAPICreate();
+  if (!api) {
+    g_object_unref(doc);
+    return NULL;
+  }
+  const char *lang = getenv("TESSERACT_LANG");
+  if (!lang || !*lang) {
+    lang = "eng";
+  }
+  if (TessBaseAPIInit3(api, NULL, lang) != 0) {
+    TessBaseAPIDelete(api);
+    g_object_unref(doc);
+    return NULL;
+  }
+  TessBaseAPISetPageSegMode(api, PSM_AUTO);
+
+  int pages = poppler_document_get_n_pages(doc);
+  StringBuffer sb;
+  sb_init(&sb);
+  for (int i = 0; i < pages; ++i) {
+    PopplerPage *page = poppler_document_get_page(doc, i);
+    if (!page) {
+      continue;
+    }
+    Pix *pix = render_pdf_page_to_pix(page);
+    g_object_unref(page);
+    if (!pix) {
+      continue;
+    }
+    TessBaseAPISetImage2(api, pix);
+    char *text = TessBaseAPIGetUTF8Text(api);
+    if (text && *text) {
+      if (pages > 1) {
+        sb_append_printf(&sb, "----- Page %d -----\n", i + 1);
+      }
+      sb_append_str(&sb, text);
+      sb_append_char(&sb, '\n');
+    }
+    if (text) {
+      TessDeleteText(text);
+    }
+    pixDestroy(&pix);
+  }
+  TessBaseAPIDelete(api);
+  g_object_unref(doc);
+  if (sb.length == 0) {
+    sb_clean(&sb);
+    return NULL;
+  }
+  return sb_detach(&sb);
+}
+#endif
+
 #ifdef HAVE_POPPLER_GLIB
 static char *extract_pdf_text(const char *path) {
   if (!path) {
@@ -462,12 +620,25 @@ int attachment_format_message(const char *path, AttachmentResult *result, char *
   const char *ext = extension_label(path);
 #endif
 
+#if defined(HAVE_POPPLER_GLIB) || defined(HAVE_TESSERACT)
+  bool is_pdf = (mime && strstr(mime, "pdf"));
+#if defined(HAVE_POPPLER_GLIB) || (defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2))
+  if (!is_pdf && ext) {
 #ifdef HAVE_POPPLER_GLIB
-  if ((mime && strstr(mime, "pdf")) || (ext && !strcasecmp(ext, "pdf"))) {
-    char *text = extract_pdf_text(path);
-    if (text) {
-      int rc = format_text_payload(path, mime, text, strlen(text), result);
-      free(text);
+    if (!strcasecmp(ext, "pdf")) {
+      is_pdf = true;
+    }
+#endif
+  }
+#endif
+#endif
+
+#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
+  if (is_pdf) {
+    char *ocr_text = extract_pdf_text_ocr(path);
+    if (ocr_text) {
+      int rc = format_text_payload(path, mime, ocr_text, strlen(ocr_text), result);
+      free(ocr_text);
       free(bytes);
       free((void *) mime);
       return rc;
@@ -487,6 +658,19 @@ int attachment_format_message(const char *path, AttachmentResult *result, char *
     }
   } else if (ext && (!strcasecmp(ext, "xlsx"))) {
     char *text = extract_xlsx_text(path);
+    if (text) {
+      int rc = format_text_payload(path, mime, text, strlen(text), result);
+      free(text);
+      free(bytes);
+      free((void *) mime);
+      return rc;
+    }
+  }
+#endif
+
+#ifdef HAVE_POPPLER_GLIB
+  if (is_pdf) {
+    char *text = extract_pdf_text(path);
     if (text) {
       int rc = format_text_payload(path, mime, text, strlen(text), result);
       free(text);
@@ -551,9 +735,31 @@ int attachment_extract_text_payload(const char *path, AttachmentTextPayload *pay
 #if defined(HAVE_POPPLER_GLIB) || (defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2))
   const char *ext = extension_label(path);
 #endif
+#if defined(HAVE_POPPLER_GLIB) || defined(HAVE_TESSERACT)
+  bool is_pdf = (payload->mime_label && strstr(payload->mime_label, "pdf"));
+#if defined(HAVE_POPPLER_GLIB) || (defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2))
+  if (!is_pdf && ext && !strcasecmp(ext, "pdf")) {
+    is_pdf = true;
+  }
+#endif
+#endif
+
+#if defined(HAVE_POPPLER_GLIB) && defined(HAVE_TESSERACT)
+  if (is_pdf) {
+    char *ocr_text = extract_pdf_text_ocr(path);
+    if (ocr_text) {
+      payload->data = ocr_text;
+      payload->length = strlen(ocr_text);
+      payload->extracted_from_container = true;
+      payload->is_textual = true;
+      rc = 0;
+      goto done;
+    }
+  }
+#endif
 
 #ifdef HAVE_POPPLER_GLIB
-  if ((payload->mime_label && strstr(payload->mime_label, "pdf")) || (ext && !strcasecmp(ext, "pdf"))) {
+  if (is_pdf) {
     char *extracted_pdf = extract_pdf_text(path);
     if (extracted_pdf) {
       payload->data = extracted_pdf;

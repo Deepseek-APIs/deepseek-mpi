@@ -15,7 +15,8 @@ Follow these steps to go from zero to a working Deepseek MPI deployment on CentO
 | libcurl + headers | HTTP client with TLS, retries, compression. | `pkg-config --modversion libcurl` |
 | ncurses + headers | Rank 0 ncurses prompt (standard + REPL). | `pkg-config --cflags ncurses` |
 | GNU Readline | Interactive prompt when the TUI is disabled. | `pkg-config --modversion readline` |
-| poppler-glib | Extracts text from uploaded PDFs. | `pkg-config --modversion poppler-glib` |
+| poppler-glib | Renders PDFs for text/ OCR extraction. | `pkg-config --modversion poppler-glib` |
+| Tesseract + Leptonica | OCR fallback for image-only PDFs. | `pkg-config --modversion tesseract` |
 | Autotools (`autoconf`, `automake`, `libtool`, `pkg-config`) | Generates portable build files. | `autoreconf --version` |
 | Doxygen (optional) | API docs (`make doc`). | `doxygen --version` |
 
@@ -27,7 +28,8 @@ Install everything on CentOS 7:
 sudo yum groupinstall -y "Development Tools"
 sudo yum install -y openmpi openmpi-devel libcurl-devel ncurses-devel \
                     readline-devel autoconf automake libtool pkgconfig doxygen \
-                    libxml2-devel file-devel libarchive-devel poppler-glib-devel
+                    libxml2-devel file-devel libarchive-devel poppler-glib-devel \
+                    tesseract tesseract-devel leptonica-devel
 ```
 
 > **Tip:** If you use a custom MPI distribution, ensure its `bin/` directory (with `mpicc`, `mpirun`) is ahead of `/usr/bin` in your `PATH` before running `configure`.
