@@ -54,7 +54,7 @@ Run `mpirun ... ./src/deepseek_mpi --repl` when you need a chat-style workflow w
 
 ### File Staging Tips
 
-- Input files are MIME-sniffed before staging: plain text/code goes in verbatim, Office/LibreOffice archives are unpacked for their paragraphs/cells, and opaque binaries are summarized via base64. You still need to monitor `--max-request-bytes` (and consider `--tasks`/`--mp` or chunk autoscaling) before dropping massive blobs into the REPL.
+- Input files are MIME-sniffed before staging: plain text/code goes in verbatim, Office/LibreOffice archives and PDFs are unpacked for their paragraphs/cells, and opaque binaries are summarized via base64. You still need to monitor `--max-request-bytes` (and consider `--tasks`/`--mp` or chunk autoscaling) before dropping massive blobs into the REPL.
 - Use a scratch buffer if you need to merge multiple files: load each path sequentially, edit the combined prompt in-place, then hit `Ctrl+K` once you’re satisfied.
 - Remember that staged prompts live only on rank 0 until you submit—you can press `/clear` or `Ctrl+C` repeatedly without touching previously submitted history.
 

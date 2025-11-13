@@ -15,10 +15,11 @@ Follow these steps to go from zero to a working Deepseek MPI deployment on CentO
 | libcurl + headers | HTTP client with TLS, retries, compression. | `pkg-config --modversion libcurl` |
 | ncurses + headers | Rank 0 ncurses prompt (standard + REPL). | `pkg-config --cflags ncurses` |
 | GNU Readline | Interactive prompt when the TUI is disabled. | `pkg-config --modversion readline` |
+| poppler-glib | Extracts text from uploaded PDFs. | `pkg-config --modversion poppler-glib` |
 | Autotools (`autoconf`, `automake`, `libtool`, `pkg-config`) | Generates portable build files. | `autoreconf --version` |
 | Doxygen (optional) | API docs (`make doc`). | `doxygen --version` |
 
-> `configure` still probes for `libmagic`, `libxml2`, and `libarchive`. When available, Deepseek MPI can sniff MIME types and extract text from Office/LibreOffice documents before they ever hit the API; without them it falls back to plain-text reads and descriptive base64, so builds still succeed.
+> `configure` probes for `libmagic`, `libxml2`, `libarchive`, and `poppler-glib`. When available, Deepseek MPI can sniff MIME types and extract text from Office/LibreOffice documents and PDFs before they ever hit the API; without them it falls back to plain-text reads and descriptive base64, so builds still succeed.
 
 Install everything on CentOS 7:
 
@@ -26,7 +27,7 @@ Install everything on CentOS 7:
 sudo yum groupinstall -y "Development Tools"
 sudo yum install -y openmpi openmpi-devel libcurl-devel ncurses-devel \
                     readline-devel autoconf automake libtool pkgconfig doxygen \
-                    libxml2-devel file-devel libarchive-devel
+                    libxml2-devel file-devel libarchive-devel poppler-glib-devel
 ```
 
 > **Tip:** If you use a custom MPI distribution, ensure its `bin/` directory (with `mpicc`, `mpirun`) is ahead of `/usr/bin` in your `PATH` before running `configure`.

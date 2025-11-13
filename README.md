@@ -11,7 +11,7 @@ Distributed TUI client for the DeepSeek Platform API. The utility slices very la
 - **Configurable CLI** – tune endpoints, chunk sizing, retry windows, logging, stdin/input sources, and more.
 - **Robust HTTP client** – libcurl with exponential backoff, deterministic JSON payloads, and OpenAI/Anthropic compatibility.
 - **Logging** – mirrored console + file logging with rank annotations for easy traceability.
-- **Attachment-aware uploads** – input files are MIME-sniffed, Office/LibreOffice archives are unpacked for their text, and binary blobs fall back to descriptive base64 so DeepSeek always gets something interpretable.
+- **Attachment-aware uploads** – input files are MIME-sniffed, Office/LibreOffice archives and PDFs are unpacked for their text, and binary blobs fall back to descriptive base64 so DeepSeek always gets something interpretable.
 - **Doxygen docs** – `make doc` renders browsable API docs in `doc/html`.
 - **Response archival** – optional `--response-dir` switch persists every chunk response as JSON for audit trails.
 

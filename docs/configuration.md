@@ -118,13 +118,13 @@ Disable persistence with `--no-response-files` (or `response_files_enabled=false
 
 ## Optional Libraries & Attachment Extraction
 
-`configure` still probes for `libxml2`, `libmagic`, and `libarchive`. When present, Deepseek MPI can unpack Office/LibreOffice containers (`.docx`, `.xlsx`, `.odt`, `.ods`, etc.) and pass the extracted text into the normal chunking pipeline instead of uploading opaque binaries. Even without those libraries:
+`configure` still probes for `libxml2`, `libmagic`, `libarchive`, and `poppler-glib`. When present, Deepseek MPI can unpack Office/LibreOffice containers (`.docx`, `.xlsx`, `.odt`, `.ods`, etc.) and PDFs, then pass the extracted text into the normal chunking pipeline instead of uploading opaque binaries. Even without those libraries:
 
 - `libmagic` (or our extension-based fallback) tags each `--input-file` with a MIME type so logs explain what was ingested.
 - Text-like formats (`text/*`, JSON, XML, code) are read verbatim.
 - Truly binary blobs are converted into a descriptive, base64-wrapped note so DeepSeek receives at least a textual summary rather than raw bytes.
 
-This all happens transparently inside `attachment_extract_text_payload`. If you run without `libxml2/libarchive`, archive extraction simply falls back to the other heuristics; no CLI flags need to change.
+This all happens transparently inside `attachment_extract_text_payload`. If you run without `libxml2/libarchive`/`poppler-glib`, archive/PDF extraction simply falls back to the other heuristics; no CLI flags need to change.
 
 ## Security & Secrets
 
