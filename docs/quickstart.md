@@ -18,7 +18,7 @@ Follow these steps to go from zero to a working Deepseek MPI deployment on CentO
 | Autotools (`autoconf`, `automake`, `libtool`, `pkg-config`) | Generates portable build files. | `autoreconf --version` |
 | Doxygen (optional) | API docs (`make doc`). | `doxygen --version` |
 
-> `configure` still probes for `libmagic`, `libxml2`, and `libarchive` (they powered the retired wrapper’s attachment loader), but those probes are optional—builds continue even if the libraries are absent.
+> `configure` still probes for `libmagic`, `libxml2`, and `libarchive`. When available, Deepseek MPI can sniff MIME types and extract text from Office/LibreOffice documents before they ever hit the API; without them it falls back to plain-text reads and descriptive base64, so builds still succeed.
 
 Install everything on CentOS 7:
 

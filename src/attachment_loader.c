@@ -5,6 +5,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -308,6 +309,44 @@ static char *extract_xlsx_text(const char *path) {
   xmlFreeDoc(doc);
   return sb_detach(&sb);
 }
+
+static char *extract_odf_text(const char *path) {
+  unsigned char *xml_data = NULL;
+  size_t len = 0;
+  if (extract_member(path, "content.xml", &xml_data, &len) != 0) {
+    return NULL;
+  }
+  xmlDocPtr doc = xmlReadMemory((const char *) xml_data, (int) len, "odf", NULL, XML_PARSE_RECOVER);
+  free(xml_data);
+  if (!doc) {
+    return NULL;
+  }
+  xmlNode *root = xmlDocGetRootElement(doc);
+  StringBuffer sb;
+  sb_init(&sb);
+  xml_append_text(root, &sb);
+  xmlFreeDoc(doc);
+  return sb_detach(&sb);
+}
+
+static char *extract_office_like_text(const char *path, const char *ext) {
+  if (!ext) {
+    return NULL;
+  }
+  if (!strcasecmp(ext, "docx") || !strcasecmp(ext, "docm") || !strcasecmp(ext, "dotx") ||
+      !strcasecmp(ext, "dotm")) {
+    return extract_docx_text(path);
+  }
+  if (!strcasecmp(ext, "xlsx") || !strcasecmp(ext, "xlsm") || !strcasecmp(ext, "xltx") ||
+      !strcasecmp(ext, "xltm")) {
+    return extract_xlsx_text(path);
+  }
+  if (!strcasecmp(ext, "odt") || !strcasecmp(ext, "ott") || !strcasecmp(ext, "ods") ||
+      !strcasecmp(ext, "odp") || !strcasecmp(ext, "fodt") || !strcasecmp(ext, "fods")) {
+    return extract_odf_text(path);
+  }
+  return NULL;
+}
 #endif
 
 static int format_binary_payload(const char *path, const char *mime, const unsigned char *data, size_t len,
@@ -360,7 +399,9 @@ int attachment_format_message(const char *path, AttachmentResult *result, char *
   }
   char *magic_err = NULL;
   const char *mime = detect_mime_type(path, bytes, len, &magic_err);
-  (void) magic_err;
+  if (magic_err) {
+    free(magic_err);
+  }
 
 #if defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2)
   const char *ext = extension_label(path);
@@ -409,4 +450,97 @@ void attachment_result_clean(AttachmentResult *result) {
   free(result->mime_label);
   result->message_text = NULL;
   result->mime_label = NULL;
+}
+
+int attachment_extract_text_payload(const char *path, AttachmentTextPayload *payload, char **error_out) {
+  if (!path || !payload) {
+    assign_error(error_out, "internal: missing file or payload");
+    return -1;
+  }
+  memset(payload, 0, sizeof *payload);
+  unsigned char *bytes = NULL;
+  size_t len = 0;
+  if (read_all_bytes(path, &bytes, &len, error_out) != 0) {
+    return -1;
+  }
+  int rc = -1;
+  char *magic_err = NULL;
+  char *mime = (char *) detect_mime_type(path, bytes, len, &magic_err);
+  if (magic_err) {
+    free(magic_err);
+  }
+  if (!mime) {
+    mime = strdup("application/octet-stream");
+    if (!mime) {
+      assign_error(error_out, "unable to allocate mime label");
+      goto fail;
+    }
+  }
+  payload->mime_label = mime;
+
+#if defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2)
+  const char *ext = extension_label(path);
+  char *extracted = extract_office_like_text(path, ext);
+  if (extracted) {
+    payload->data = extracted;
+    payload->length = strlen(extracted);
+    payload->extracted_from_container = true;
+    payload->is_textual = true;
+    rc = 0;
+    goto done;
+  }
+#endif
+
+  DataClass cls = classify_buffer(bytes, len);
+  bool textual = (payload->mime_label && mime_is_textual(payload->mime_label)) || cls == DATA_CLASS_TEXT;
+  if (textual) {
+    char *copy = malloc(len + 1);
+    if (!copy) {
+      assign_error(error_out, "unable to allocate %zu bytes", len + 1);
+      goto fail;
+    }
+    memcpy(copy, bytes, len);
+    copy[len] = '\0';
+    payload->data = copy;
+    payload->length = len;
+    payload->is_textual = true;
+    rc = 0;
+    goto done;
+  }
+
+  AttachmentResult bridge;
+  memset(&bridge, 0, sizeof bridge);
+  if (format_binary_payload(path, payload->mime_label, bytes, len, &bridge) != 0) {
+    assign_error(error_out, "unable to encode binary file %s", path);
+    goto fail;
+  }
+  payload->data = bridge.message_text;
+  payload->length = bridge.message_text ? strlen(bridge.message_text) : 0;
+  payload->is_textual = true;
+  payload->encoded_binary = true;
+  free(bridge.mime_label);
+  rc = 0;
+
+done:
+  free(bytes);
+  return rc;
+
+fail:
+  free(bytes);
+  attachment_text_payload_clean(payload);
+  return -1;
+}
+
+void attachment_text_payload_clean(AttachmentTextPayload *payload) {
+  if (!payload) {
+    return;
+  }
+  free(payload->data);
+  free(payload->mime_label);
+  payload->data = NULL;
+  payload->mime_label = NULL;
+  payload->length = 0;
+  payload->extracted_from_container = false;
+  payload->is_textual = false;
+  payload->encoded_binary = false;
 }

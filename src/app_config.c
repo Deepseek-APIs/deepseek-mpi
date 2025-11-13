@@ -259,6 +259,7 @@ ProgramConfig config_defaults(void) {
   cfg.use_stdin = false;
   cfg.force_quiet = false;
   cfg.repl_mode = false;
+  cfg.repl_history_limit = DEEPSEEK_DEFAULT_REPL_HISTORY;
 
   cfg.rank = 0;
   cfg.world_size = 1;
@@ -323,6 +324,7 @@ void config_free(ProgramConfig *config) {
   config->use_tui_log_view = false;
   config->tui_log_view_explicit = false;
   config->repl_mode = false;
+  config->repl_history_limit = DEEPSEEK_DEFAULT_REPL_HISTORY;
   config->auto_scale_mode = AUTOSCALE_MODE_NONE;
   config->auto_scale_threshold_bytes = DEEPSEEK_AUTOSCALE_DEFAULT_THRESHOLD;
   config->auto_scale_factor = DEEPSEEK_AUTOSCALE_DEFAULT_FACTOR;
@@ -581,6 +583,13 @@ int config_apply_kv(ProgramConfig *config, const char *key, const char *value, c
       return -1;
     }
     config->retry_delay_ms = tmp;
+  } else if (strcmp(key, "repl_history") == 0 || strcmp(key, "repl_history_limit") == 0) {
+    size_t tmp;
+    if (parse_size_value(val, &tmp) != 0) {
+      cfg_assign_error(error_out, "invalid repl_history value: %s", val);
+      return -1;
+    }
+    config->repl_history_limit = tmp;
   } else if (strcmp(key, "dry_run") == 0) {
     bool flag;
     if (parse_bool_value(val, &flag) != 0) {

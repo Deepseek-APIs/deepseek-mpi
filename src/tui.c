@@ -16,6 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "attachment_loader.h"
 #include "file_loader.h"
 #include "string_buffer.h"
 
@@ -372,7 +373,6 @@ static void repl_ui_show_help(void) {
   repl_ui_print_line("DeepSeek MPI chat commands:");
   repl_ui_print_line("  /help                  Show this message");
   repl_ui_print_line("  /quit or /exit         Leave the REPL");
-  repl_ui_print_line("  /np <n>                Reminder to restart mpirun with a new -np value");
   repl_ui_print_line("  /clear                 Reset the pending prompt/upload buffer");
   repl_ui_print_line("");
 }
@@ -668,6 +668,33 @@ static void append_file_payload(StringBuffer *buffer) {
   sb_append_char(buffer, '\n');
 }
 
+static bool repl_ui_append_file_to_buffer(const char *path, StringBuffer *buffer) {
+  if (!path || !*path || !buffer) {
+    return false;
+  }
+  char *file_err = NULL;
+  AttachmentTextPayload text_payload = {0};
+  bool appended = false;
+  if (attachment_extract_text_payload(path, &text_payload, &file_err) == 0) {
+    if (text_payload.data && text_payload.length > 0) {
+      sb_append(buffer, text_payload.data, text_payload.length);
+      if (text_payload.data[text_payload.length - 1] != '\n') {
+        sb_append_char(buffer, '\n');
+      }
+    }
+    char note[256];
+    snprintf(note, sizeof note, "[Loaded %s (%zu bytes, %s)]", path, text_payload.length,
+             text_payload.mime_label ? text_payload.mime_label : "unknown");
+    repl_ui_print_line(note);
+    appended = true;
+  } else {
+    repl_ui_print_line(file_err ? file_err : "Unable to read file");
+  }
+  free(file_err);
+  attachment_text_payload_clean(&text_payload);
+  return appended;
+}
+
 int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len, char **error_out) {
   if (!config || !output || !output_len) {
     set_error(error_out, "internal: missing argument");
@@ -743,20 +770,21 @@ int tui_capture_payload(ProgramConfig *config, char **output, size_t *output_len
                strerror(errno));
       continue;
     }
-    char *file_data = NULL;
     char *err = NULL;
-    size_t file_len = 0;
-    if (file_loader_read_all(file_path, &file_data, &file_len, &err) != 0) {
+    AttachmentTextPayload text_payload = {0};
+    if (attachment_extract_text_payload(file_path, &text_payload, &err) != 0) {
       set_error(error_out, "%s", err ? err : "unable to read provided file");
       free(err);
+      attachment_text_payload_clean(&text_payload);
       goto cleanup;
     }
-    if (file_data) {
-      sb_append(&buffer, file_data, file_len);
+    if (text_payload.data && text_payload.length > 0) {
+      sb_append(&buffer, text_payload.data, text_payload.length);
       append_file_payload(&buffer);
-      free(file_data);
     }
-    mvprintw(preload_status_row, 2, "Loaded %s.", file_path);
+    mvprintw(preload_status_row, 2, "Loaded %s (%zu bytes, %s).", file_path, text_payload.length,
+             text_payload.mime_label ? text_payload.mime_label : "unknown");
+    attachment_text_payload_clean(&text_payload);
     preload_complete = true;
   }
   row = preload_status_row + 1;
@@ -941,24 +969,7 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
       if (ch == '\r' || ch == '\n' || ch == KEY_ENTER) {
         file_line[file_len] = '\0';
         if (file_len > 0) {
-          char *file_data = NULL;
-          char *file_err = NULL;
-          size_t loaded_len = 0;
-          if (file_loader_read_all(file_line, &file_data, &loaded_len, &file_err) == 0) {
-            if (file_data && loaded_len > 0) {
-              sb_append(&buffer, file_data, loaded_len);
-              if (file_data[loaded_len - 1] != '\n') {
-                sb_append_char(&buffer, '\n');
-              }
-            }
-            char note[256];
-            snprintf(note, sizeof note, "[Loaded %s (%zu bytes)]", file_line, loaded_len);
-            repl_ui_print_line(note);
-            free(file_data);
-          } else {
-            repl_ui_print_line(file_err ? file_err : "Unable to read file");
-            free(file_err);
-          }
+          repl_ui_append_file_to_buffer(file_line, &buffer);
         }
         file_len = 0;
         file_cursor = 0;
@@ -1010,6 +1021,13 @@ int tui_capture_repl_payload(ProgramConfig *config, char **output, size_t *outpu
       continue;
     }
     if (ch == CTRL_SEND_KEY) {
+      if (file_len > 0) {
+        repl_ui_append_file_to_buffer(file_line, &buffer);
+        file_len = 0;
+        file_cursor = 0;
+        file_line[0] = '\0';
+        repl_ui_update_file_input(file_line, file_cursor);
+      }
       prompt_line[prompt_len] = '\0';
       if (prompt_len > 0) {
         sb_append_str(&buffer, prompt_line);
@@ -1191,14 +1209,6 @@ static bool repl_ui_handle_prompt_command(const char *line, StringBuffer *buffer
       sb_reset(buffer);
     }
     repl_ui_print_system_message("Cleared pending prompt buffer.");
-    return true;
-  }
-  if (strcasecmp(keyword, "np") == 0) {
-    char note[256];
-    const char *np_text = (*args && *args != '\0') ? args : "<n>";
-    snprintf(note, sizeof note,
-             "This REPL cannot change MPI ranks at runtime. Restart with `mpirun -np %.*s`.", 32, np_text);
-    repl_ui_print_system_message(note);
     return true;
   }
   if (strcasecmp(keyword, "quit") == 0 || strcasecmp(keyword, "exit") == 0) {

@@ -19,6 +19,7 @@
 
 #include "api_client.h"
 #include "app_config.h"
+#include "attachment_loader.h"
 #include "cli.h"
 #include "deepseek.h"
 #include "file_loader.h"
@@ -32,6 +33,12 @@ typedef struct {
   char *data;
   size_t length;
 } Payload;
+
+typedef struct {
+  size_t *chunks;
+  size_t count;
+  size_t capacity;
+} ReplTurnLedger;
 
 static char *dup_substring(const char *src, size_t len) {
   if (!src || len == 0) {
@@ -264,6 +271,11 @@ static void log_pretty_responses(Logger *logger, const char *prefix, const char 
 static void maybe_adjust_chunk_from_tasks(ProgramConfig *config, const Payload *payload, Logger *logger);
 static void maybe_autoscale_payload(ProgramConfig *config, const Payload *payload, Logger *logger);
 static int ensure_input_file_available(ProgramConfig *config, Logger *logger);
+static void adjust_chunking_for_payload(ProgramConfig *config, const Payload *payload, Logger *logger);
+static void repl_turn_ledger_init(ReplTurnLedger *ledger);
+static void repl_turn_ledger_free(ReplTurnLedger *ledger);
+static void repl_turn_ledger_append(ReplTurnLedger *ledger, size_t chunk_len);
+static void repl_turn_ledger_trim(ReplTurnLedger *ledger, size_t limit, StringBuffer *history);
 
 static void assign_error(char **error_out, const char *fmt, ...) {
   if (!error_out) {
@@ -405,7 +417,28 @@ static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *p
       rc = ensure_input_file_available(config, logger);
       if (rc == 0) {
         logger_log(logger, LOG_LEVEL_INFO, "Reading payload from file %s", config->input_file);
-        rc = file_loader_read_all(config->input_file, &payload->data, &payload->length, &error);
+        AttachmentTextPayload text_payload = {0};
+        rc = attachment_extract_text_payload(config->input_file, &text_payload, &error);
+        if (rc == 0) {
+          const char *mime = text_payload.mime_label ? text_payload.mime_label : "unknown";
+          if (text_payload.extracted_from_container) {
+            logger_log(logger, LOG_LEVEL_INFO,
+                       "Extracted textual content from %s (detected MIME %s)",
+                       config->input_file, mime);
+          } else if (text_payload.encoded_binary) {
+            logger_log(logger, LOG_LEVEL_WARN,
+                       "File %s is binary (%s); re-encoded as descriptive base64 before sending",
+                       config->input_file, mime);
+          } else if (!text_payload.is_textual) {
+            logger_log(logger, LOG_LEVEL_WARN,
+                       "File %s may include binary data (MIME %s); DeepSeek might ignore it",
+                       config->input_file, mime);
+          }
+          payload->data = text_payload.data;
+          payload->length = text_payload.length;
+          text_payload.data = NULL;
+        }
+        attachment_text_payload_clean(&text_payload);
       }
     }
   } else if (config->use_stdin) {
@@ -443,8 +476,9 @@ static int gather_payload_root(ProgramConfig *config, Logger *logger, Payload *p
   }
 
   logger_log(logger, LOG_LEVEL_INFO, "Captured %zu bytes of payload", payload->length);
-  maybe_autoscale_payload(config, payload, logger);
-  maybe_adjust_chunk_from_tasks(config, payload, logger);
+  if (!config->repl_mode) {
+    adjust_chunking_for_payload(config, payload, logger);
+  }
   return 0;
 }
 
@@ -521,6 +555,67 @@ static void maybe_autoscale_payload(ProgramConfig *config, const Payload *payloa
                "Autoscale (threads) requested for %zu-byte payload but MPI world size is fixed at %d. "
                "Rerun with a higher -np or enable wrapper autoscale for rank scaling.",
                payload->length, config->world_size);
+  }
+}
+
+static void adjust_chunking_for_payload(ProgramConfig *config, const Payload *payload, Logger *logger) {
+  if (!config || !payload || !payload->data || payload->length == 0) {
+    return;
+  }
+  maybe_autoscale_payload(config, payload, logger);
+  maybe_adjust_chunk_from_tasks(config, payload, logger);
+}
+
+static void repl_turn_ledger_init(ReplTurnLedger *ledger) {
+  if (!ledger) {
+    return;
+  }
+  ledger->chunks = NULL;
+  ledger->count = 0;
+  ledger->capacity = 0;
+}
+
+static void repl_turn_ledger_free(ReplTurnLedger *ledger) {
+  if (!ledger) {
+    return;
+  }
+  free(ledger->chunks);
+  ledger->chunks = NULL;
+  ledger->count = 0;
+  ledger->capacity = 0;
+}
+
+static void repl_turn_ledger_append(ReplTurnLedger *ledger, size_t chunk_len) {
+  if (!ledger || chunk_len == 0) {
+    return;
+  }
+  if (ledger->count == ledger->capacity) {
+    size_t new_cap = ledger->capacity ? ledger->capacity * 2 : 8;
+    size_t *next = realloc(ledger->chunks, new_cap * sizeof(size_t));
+    if (!next) {
+      return;
+    }
+    ledger->chunks = next;
+    ledger->capacity = new_cap;
+  }
+  ledger->chunks[ledger->count++] = chunk_len;
+}
+
+static void repl_turn_ledger_trim(ReplTurnLedger *ledger, size_t limit, StringBuffer *history) {
+  if (!ledger || !history || limit == 0) {
+    return;
+  }
+  while (ledger->count > limit && history->length > 0) {
+    size_t drop = ledger->chunks[0];
+    if (drop > history->length) {
+      drop = history->length;
+    }
+    memmove(history->data, history->data + drop, history->length - drop + 1);
+    history->length -= drop;
+    if (ledger->count > 1) {
+      memmove(ledger->chunks, ledger->chunks + 1, (ledger->count - 1) * sizeof(size_t));
+    }
+    ledger->count--;
   }
 }
 
@@ -969,6 +1064,8 @@ static int run_repl_session(ProgramConfig *config, Logger *logger, bool *tui_log
   }
   StringBuffer history;
   sb_init(&history);
+  ReplTurnLedger turn_ledger;
+  repl_turn_ledger_init(&turn_ledger);
   size_t turn = 1;
   int running = 1;
   while (running) {
@@ -1005,6 +1102,7 @@ static int run_repl_session(ProgramConfig *config, Logger *logger, bool *tui_log
     Payload composite = {0};
     if (config->rank == 0) {
       build_repl_payload(&history, &prompt, turn, &composite);
+      adjust_chunking_for_payload(config, &composite, logger);
     }
 
     StringBuffer repl_response;
@@ -1017,6 +1115,7 @@ static int run_repl_session(ProgramConfig *config, Logger *logger, bool *tui_log
     int exec_rc = execute_payload(config, logger, &composite, config->rank == 0 ? &repl_response : NULL);
 
     if (config->rank == 0) {
+      size_t turn_start = history.length;
       sb_append_printf(&history, "User #%zu:\n%.*s\n", turn,
                        (int) (prompt.length), prompt.data ? prompt.data : "");
       if (exec_rc == 0 && repl_response.length > 0 && repl_response.data) {
@@ -1028,6 +1127,9 @@ static int run_repl_session(ProgramConfig *config, Logger *logger, bool *tui_log
         sb_append_printf(&history, "Assistant #%zu:\n%s\n\n", turn, fallback);
         tui_repl_append_assistant(turn, fallback, strlen(fallback));
       }
+      size_t turn_chunk = history.length - turn_start;
+      repl_turn_ledger_append(&turn_ledger, turn_chunk);
+      repl_turn_ledger_trim(&turn_ledger, config->repl_history_limit, &history);
       sb_clean(&repl_response);
     }
 
@@ -1037,6 +1139,7 @@ static int run_repl_session(ProgramConfig *config, Logger *logger, bool *tui_log
     turn++;
   }
   sb_clean(&history);
+  repl_turn_ledger_free(&turn_ledger);
   if (config->rank == 0 && config->use_tui && config->repl_mode) {
     tui_repl_shutdown();
   }

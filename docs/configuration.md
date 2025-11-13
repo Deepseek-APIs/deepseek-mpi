@@ -27,7 +27,7 @@ If you omit `--api-provider`, the config layer auto-detects one by looking at th
 | API key env var | `DEEPSEEK_API_KEY` | Switches to `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` if you change providers (unless overridden). |
 | Chunk size | `2048` bytes | Clamped by `DEEPSEEK_MIN_CHUNK_SIZE`. |
 | Max request bytes | `16384` | Guardrail for encoded payload size. |
-| Tasks | `0` (disabled) | Autoset only when `--tasks` or autoscale chunks mode kicks in. |
+| Tasks | `0` (disabled) | Autoset only when `--tasks`/`--mp` (or legacy `--np`) or autoscale chunks mode kicks in. |
 | Max retries | `3` | libcurl retry attempts per chunk. |
 | Retry delay | `500 ms` | Backoff doubles up to ~4 s unless you override. |
 | Network retries | `2` | MPI-level client resets after transient network errors. |
@@ -39,6 +39,7 @@ If you omit `--api-provider`, the config layer auto-detects one by looking at th
 | Autoscale threshold | `100 MB` | Multiplies tasks/ranks when exceeded (mode dependent). |
 | Autoscale factor | `2` | Doubling is a good starting point. |
 | REPL mode | `false` | Enable with `--repl` to keep MPI ranks alive between prompts. |
+| REPL history limit | `4` | Maximum prior turns resent in REPL mode (`--repl-history 0` disables the cap). |
 | Show progress | `true` | Toggle with `--hide-progress`. |
 | Use TUI | `true` | Disable via `--no-tui`, `--noninteractive`, or `use_tui=false`. |
 | Use Readline | `true` | When the TUI is disabled, fallback to GNU Readline. |
@@ -101,7 +102,7 @@ Track the aggregated stats in the logs—rank 0 prints `processed`, `failures`,
 | `chunks` | Multiplies the logical task count (`base_tasks * auto_scale_factor`) when `payload_size >= auto_scale_threshold`. |
 | `threads` | Logs guidance because MPI ranks are fixed mid-run—restart `mpirun` with a higher `-np` if you need more processes. |
 
-Best practice: set `auto_scale_threshold` slightly below the payload where you notice timeouts, and start with `auto_scale_factor=2`. Combine with `--tasks` to ensure a non-zero baseline.
+Best practice: set `auto_scale_threshold` slightly below the payload where you notice timeouts, and start with `auto_scale_factor=2`. Combine with `--tasks`/`--mp` (or `--np`) to ensure a non-zero baseline.
 
 ## Response Persistence
 
@@ -115,9 +116,15 @@ Disable persistence with `--no-response-files` (or `response_files_enabled=false
 - `log_file=/var/log/deepseek/rank.log` enables per-rank file logging; combine with `force_quiet=true` when you only want on-disk logs.
 - `progress_interval=N` throttles info logs for massive jobs (e.g., print every 100 chunks).
 
-## Optional Libraries
+## Optional Libraries & Attachment Extraction
 
-`configure` still probes for `libxml2`, `libmagic`, and `libarchive` (they backed the legacy wrapper’s attachment loader). The probes are optional—if the libraries are absent the build continues with those features disabled, and the core MPI client operates normally.
+`configure` still probes for `libxml2`, `libmagic`, and `libarchive`. When present, Deepseek MPI can unpack Office/LibreOffice containers (`.docx`, `.xlsx`, `.odt`, `.ods`, etc.) and pass the extracted text into the normal chunking pipeline instead of uploading opaque binaries. Even without those libraries:
+
+- `libmagic` (or our extension-based fallback) tags each `--input-file` with a MIME type so logs explain what was ingested.
+- Text-like formats (`text/*`, JSON, XML, code) are read verbatim.
+- Truly binary blobs are converted into a descriptive, base64-wrapped note so DeepSeek receives at least a textual summary rather than raw bytes.
+
+This all happens transparently inside `attachment_extract_text_payload`. If you run without `libxml2/libarchive`, archive extraction simply falls back to the other heuristics; no CLI flags need to change.
 
 ## Security & Secrets
 

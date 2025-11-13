@@ -28,7 +28,7 @@ To reach “excellent” status (especially for welcoming contributors and ops t
 
 3. **Troubleshooting / FAQ (`docs/troubleshooting.md`)**  
    *Purpose:* Capture recurring support items (MPI rank hangs, curl timeouts, dependency installs).  
-   *Content ideas:* Error message glossary, distro-specific package names, performance tuning tips (optimal `--np`, autoscale thresholds).
+   *Content ideas:* Error message glossary, distro-specific package names, performance tuning tips (optimal `--tasks`/`--mp`, autoscale thresholds).
 
 4. **Advanced Examples (`docs/examples.md`)**  
    *Purpose:* Showcase real-world workflows beyond hello-world usage.  
@@ -45,4 +45,3 @@ To reach “excellent” status (especially for welcoming contributors and ops t
 > **Implementation note:** Additions #1 and #2 live at the repo root. Items #3–#6 expand the GitBook tree—remember to update `docs/SUMMARY.md` so they appear in navigation.
 
 By tackling these targeted gaps, we keep the current strengths (great quick start + CLI docs) while rounding out the contributor story and advanced operations guidance. Ping the docs maintainers via issues/PRs if you want to pick up any of the items above.
-

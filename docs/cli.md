@@ -15,9 +15,10 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--inline-text STRING`, `-T STRING` | Provide payload inline (disables TUI). |
 | `--tui` / `--no-tui` | Enable or disable the ncurses prompt on rank 0. |
 | `--noninteractive` | Disable both the TUI and Readline prompt, requiring `--input-file` plus an inline prompt (via `--inline-text` or trailing args). The command exits early if either input is missing. |
-| `--tasks N` | Desired logical task count; chunk size auto-adjusts. |
+| `--tasks N`, `--mp N`, `--np N` | Desired logical task count; chunk size auto-adjusts. |
 | `--readline` / `--no-readline` | Toggle the GNU Readline prompt used when the TUI is disabled. |
 | `--repl` | Keep `deepseek_mpi` running in an interactive REPL; previous prompts/responses are threaded into the next prompt. |
+| `--repl-history N` | Limit how many prior REPL turns get resent (default `4`, `0` = unlimited context). |
 
 In the standard ncurses TUI and the Readline prompt, finish your payload by typing a single `.` on its own line. `Ctrl+C` clears the active line; type `:quit`, `:exit`, or `:q` (or press `Esc`) to abandon the capture loop without submitting anything. When `--repl` is enabled, the split-window UI adds an upload field above the prompt: use `Tab` to toggle between them, Enter on the upload field to pull a file into the buffer, and `Ctrl+K` to send the accumulated prompt.
 
@@ -41,7 +42,7 @@ If you omit `--api-provider`, the client infers one from `--api-endpoint`, the A
 | `--chunk-size BYTES`, `-c BYTES` | Fixed chunk size per logical task. Minimum enforced via `DEEPSEEK_MIN_CHUNK_SIZE`. |
 | `--max-request-bytes BYTES` | Upper bound for encoded payload (defaults to ≥ chunk size). |
 | `--max-output-tokens N` | Clamp model responses for OpenAI/Anthropic backends. |
-| `--auto-scale-mode MODE` | `none`, `chunks`, or `threads`. Chunks mode multiplies `--tasks`; threads mode only logs guidance because MPI ranks are fixed for the lifetime of a run. |
+| `--auto-scale-mode MODE` | `none`, `chunks`, or `threads`. Chunks mode multiplies `--tasks`/`--mp` (and `--np` if you still use it); threads mode only logs guidance because MPI ranks are fixed for the lifetime of a run. |
 | `--auto-scale-threshold BYTES` | Trigger size for autoscaling. |
 | `--auto-scale-factor N` | Multiplier applied when the threshold is exceeded. |
 
@@ -114,6 +115,6 @@ Enable `--repl` when you want a persistent ncurses session for multi-turn prompt
 
 - `Tab` toggles focus between the prompt and the file-path field. Enter on the file field reads the file immediately and appends its contents (plus a trailing newline, if needed) to the staged prompt.
 - `Ctrl+K` submits the pending prompt; typing a single `.` on its own line still works for quick sends.
-- `/help` displays the available commands, `/clear` wipes the staged buffer, `/quit` arranges for the next submission to be `:quit`, and `/np` simply reminds you to restart `mpirun` with a different rank count.
+- `/help` displays the available commands, `/clear` wipes the staged buffer, and `/quit` arranges for the next submission to be `:quit`.
 - `Ctrl+C` clears the active field; `:quit`, `:exit`, `:q`, or pressing `Esc` exits the REPL without submitting.
 - `--tui-log-view` mirrors the latest MPI logs inside the REPL window; `--no-tui-log-view` falls back to stdout/stderr streaming.

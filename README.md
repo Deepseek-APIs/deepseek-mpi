@@ -11,6 +11,7 @@ Distributed TUI client for the DeepSeek Platform API. The utility slices very la
 - **Configurable CLI** – tune endpoints, chunk sizing, retry windows, logging, stdin/input sources, and more.
 - **Robust HTTP client** – libcurl with exponential backoff, deterministic JSON payloads, and OpenAI/Anthropic compatibility.
 - **Logging** – mirrored console + file logging with rank annotations for easy traceability.
+- **Attachment-aware uploads** – input files are MIME-sniffed, Office/LibreOffice archives are unpacked for their text, and binary blobs fall back to descriptive base64 so DeepSeek always gets something interpretable.
 - **Doxygen docs** – `make doc` renders browsable API docs in `doc/html`.
 - **Response archival** – optional `--response-dir` switch persists every chunk response as JSON for audit trails.
 
@@ -79,6 +80,7 @@ Rank 0’s ncurses UI installs a SIGINT handler so it can restore the terminal 
 - `--input-file payload.txt` or `--stdin`
 - `--inline-text "quick payload"` bypasses TUI
 - `--repl` keeps the MPI ranks alive in a REPL-style loop so every new prompt includes prior turns
+- `--repl-history 4` (default) caps the number of turns resent to DeepSeek so the context window—and bill—stay predictable; pass `--repl-history 0` for unlimited context.
 - `--no-tui --readline` switches to a plain GNU Readline prompt; type your payload and finish with a single `.` on its own line
 - `--noninteractive --input-file payload.txt --inline-text "Summarize this"` disables TUI/readline entirely and exits immediately if either the input file or inline prompt is missing—ideal for CI scripts that must fail fast
 - `--max-retries 5 --retry-delay-ms 750`
@@ -92,7 +94,7 @@ Rank 0’s ncurses UI installs a SIGINT handler so it can restore the terminal 
 - `--readline / --no-readline` choose between GNU Readline prompts or plain stdin when the ncurses TUI is disabled
 - `--tui-log-view` / `--no-tui-log-view` control the post-prompt ncurses log pane (auto-enabled when `--tui`; auto mode filters chunk/progress spam so you mostly see assistant output, while explicitly passing `--tui-log-view` restores the full log stream)
 - `--repl` opens the chat-style ncurses UI (Tab toggles between the file-path field and the prompt, Enter on the file field pulls the file into the buffer, `Ctrl+K` sends the accumulated prompt, and `/help` + `/clear` manage the pending text)
-- `--tasks 16` divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
+- `--tasks 16` (or `--mp 16` / `--np 16`) divides text/CSV/Excel payloads into 16 logical slices so MPI ranks keep working sequentially even if there are more tasks than processes
 - `--auto-scale-mode chunks --auto-scale-threshold 100000000 --auto-scale-factor 4` splits giant uploads into additional logical tasks; `threads` mode simply logs guidance because MPI rank counts are fixed for the lifetime of the job
 - Provider auto-detect kicks in automatically: if your endpoint contains `openai.com`, `anthropic.com`, or `bigmodel.cn`, your env var is `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ZAI_API_KEY`, or your key begins with well-known prefixes such as `sk-ant-`, `sk-claude`, `gk-`, or `glm-`, the client switches to the matching provider so you don’t have to pass `--api-provider`. Use `--api-provider` to override.
 
@@ -108,19 +110,19 @@ Combine options freely; every flag is also available from a simple key/value con
 - Pass `--log-file /path/to/log` (alias `--log`) to override the MPI log destination and repeat `--verbose` to raise the underlying console verbosity.
 - Use `--response-dir` when you need deterministic artifacts for downstream pipelines or compliance.
 - Response files are enabled by default (saved under `responses/` per rank/chunk). Disable with `--no-response-files` if you only want log output.
-- `--tasks` ensures the entire file (including large spreadsheets) is read once and then auto-sliced, so you’re never limited by the number of hardware threads on the box.
+- `--tasks`/`--mp` (and the legacy `--np`) ensures the entire file (including large spreadsheets) is read once and then auto-sliced, so you’re never limited by the number of hardware threads on the box.
 - Autoscaling keeps big drops moving: chunk mode divides payloads across existing ranks; threads mode simply logs a reminder that MPI ranks are fixed, so schedule a larger `-np` yourself if you need more concurrency.
 - Provider detection is automatic: endpoints, environment variable names, and well-known key prefixes (Anthropic `sk-ant-`, GLM `gk-`/`glm-`, Azure OpenAI `sk-aoai-`/`sk-az-`, etc.) steer the client toward the right REST API. Explicitly set `--api-provider` if you need to override the heuristic.
 - Inside the ncurses prompt, hit `Ctrl+C` to clear the active line, type `:quit`/`:exit`/`:q` to bail out without sending anything, and rely on the REPL-specific `/help` + `/clear` commands when you run with `--repl`.
-- The REPL scrollback keeps up to 1024 lines; use Page Up/Down (or Home/End) to browse prior output without leaving the TUI, or enable `--tui-log-view` to mirror logs in a dedicated pane.
+- The REPL scrollback keeps up to 1024 lines; use Page Up/Down (or Home/End) to browse prior output without leaving the TUI, or enable `--tui-log-view` to mirror logs in a dedicated pane. Only the most recent `--repl-history` turns are resent to the API each time (default 4), so you can keep visual history without blowing past context limits.
 - Logs stay inside the ncurses pane by default when `--tui` is active; auto mode hides most mpirun/log noise so only warnings and responses remain, while `--no-tui-log-view` drops back to stdout and `--tui-log-view` explicitly keeps the full log stream.
 - Use git for change tracking – a clean history keeps regressions easy to spot.
 - When you need a guided UX, run `mpirun -np 4 ./src/deepseek_mpi --repl`. Every time you press `Ctrl+K` the REPL gathers the ongoing conversation, packages it into a payload, and runs inference without spawning a second binary. Type `:quit` or press `Esc` to exit the REPL.
-- REPL slash commands are intentionally minimal: `/help` shows shortcuts, `/clear` wipes the staged buffer, `/quit` sets `:quit` for the next submission, and `/np` simply reminds you to restart with a different `-np` if needed.
+- REPL slash commands are intentionally minimal: `/help` shows shortcuts, `/clear` wipes the staged buffer, and `/quit` sets `:quit` for the next submission.
 
 ### REPL File Staging
 - Press `Tab` to focus the file-path field, type an absolute/relative path, and hit Enter to append the file contents directly into the prompt buffer (a trailing newline is added automatically if the file does not end with one).
-- Large files are pasted verbatim, so be mindful of `--max-request-bytes`—break huge uploads into smaller prompts or rely on `--tasks` so chunking keeps up.
+- Large files are pasted verbatim, so be mindful of `--max-request-bytes`—break huge uploads into smaller prompts or rely on `--tasks`/`--mp` so chunking keeps up.
 - The chat-style layout dedicates the top pane to prompt/response history, keeps a live REPL prompt at the bottom, and optionally mirrors the most recent MPI log window when `--tui-log-view` is active.
 
 ## License

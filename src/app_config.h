@@ -61,6 +61,7 @@ typedef struct {
   bool use_stdin;
   bool force_quiet;
   bool repl_mode;
+  size_t repl_history_limit;
 
   int rank;
   int world_size;

@@ -24,6 +24,8 @@ enum {
   OPT_RESPONSE_FILES_ON,
   OPT_RESPONSE_FILES_OFF,
   OPT_TASKS,
+  OPT_NP,
+  OPT_MP,
   OPT_API_PROVIDER,
   OPT_MAX_OUTPUT_TOKENS,
   OPT_ANTHROPIC_VERSION,
@@ -36,7 +38,8 @@ enum {
   OPT_TUI_LOG_VIEW_ON,
   OPT_TUI_LOG_VIEW_OFF,
   OPT_REPL,
-  OPT_NONINTERACTIVE
+  OPT_NONINTERACTIVE,
+  OPT_REPL_HISTORY_LIMIT
 };
 
 static void print_version(void) {
@@ -58,7 +61,7 @@ static void print_help(const char *prog) {
        "  --log-file PATH            Redirect log output\n"
        "  --response-dir DIR         Persist each chunk response as JSON\n"
        "  --response-files / --no-response-files  Toggle per-rank response file emission (default on)\n"
-       "  --tasks N                  Desired task count (auto chunking across MPI ranks)\n"
+       "  --tasks N / --mp N / --np N  Desired task count (auto chunking across MPI ranks)\n"
        "  --auto-scale-threshold BYTES  Trigger size for automatic scaling (default 100MB)\n"
        "  --auto-scale-mode MODE      Autoscale strategy: none, threads, chunks\n"
        "  --auto-scale-factor N       Multiplier applied when autoscale fires\n"
@@ -79,6 +82,8 @@ static void print_help(const char *prog) {
        "  --verbose / --quiet        Adjust console verbosity\n"
        "  --version                  Print version\n"
        "  --help                     This message\n");
+  printf("  --repl-history N         Number of prior REPL turns to resend (0 = unlimited, default %llu)\n",
+         (unsigned long long) DEEPSEEK_DEFAULT_REPL_HISTORY);
 }
 
 static int parse_size(const char *text, size_t *out) {
@@ -217,6 +222,8 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_ON},
       {"no-tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_OFF},
       {"tasks", required_argument, NULL, OPT_TASKS},
+      {"np", required_argument, NULL, OPT_NP},
+      {"mp", required_argument, NULL, OPT_MP},
       {"auto-scale-mode", required_argument, NULL, OPT_AUTOSCALE_MODE},
       {"auto-scale-threshold", required_argument, NULL, OPT_AUTOSCALE_THRESHOLD},
       {"auto-scale-factor", required_argument, NULL, OPT_AUTOSCALE_FACTOR},
@@ -224,6 +231,7 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"readline", no_argument, NULL, OPT_READLINE_ON},
       {"no-readline", no_argument, NULL, OPT_READLINE_OFF},
       {"repl", no_argument, NULL, OPT_REPL},
+      {"repl-history", required_argument, NULL, OPT_REPL_HISTORY_LIMIT},
       {"noninteractive", no_argument, NULL, OPT_NONINTERACTIVE},
       {"tui", no_argument, NULL, OPT_TUI},
       {"no-tui", no_argument, NULL, OPT_NO_TUI},
@@ -321,7 +329,9 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
     case OPT_RESPONSE_FILES_OFF:
       config->response_files_enabled = false;
       break;
-    case OPT_TASKS: {
+    case OPT_TASKS:
+    case OPT_NP:
+    case OPT_MP: {
       size_t value;
       if (parse_size(optarg, &value) != 0 || value == 0) {
         fprintf(stderr, "Invalid task count: %s\n", optarg);
@@ -352,6 +362,15 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
     case OPT_REPL:
       config->repl_mode = true;
       break;
+    case OPT_REPL_HISTORY_LIMIT: {
+      size_t value;
+      if (parse_size(optarg, &value) != 0) {
+        fprintf(stderr, "Invalid repl history size: %s\n", optarg);
+        return CLI_ERROR;
+      }
+      config->repl_history_limit = value;
+      break;
+    }
     case OPT_NONINTERACTIVE:
       config->noninteractive_mode = true;
       config->use_tui = false;

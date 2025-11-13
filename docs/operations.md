@@ -39,7 +39,7 @@ Deepseek MPI’s autoscaler lives entirely inside the core binary. When `--auto-
 | `50–150 MB` | Enable chunks autoscaling: `--auto-scale-mode chunks --auto-scale-factor 2`. |
 | `>150 MB` | Launch `mpirun` with a higher `-np` (e.g., 8) *and* keep chunks autoscaling enabled so the larger rank count stays busy. |
 
-Tune thresholds per workload; monitor wall-clock time per job to refine factors. Remember that increasing `--tasks` or enabling chunks autoscaling reduces chunk size but does not change the MPI world size—you must restart the job with a higher `-np` (via your scheduler or orchestration layer) if you need more ranks.
+Tune thresholds per workload; monitor wall-clock time per job to refine factors. Remember that increasing `--tasks`/`--mp` (or the legacy `--np`) or enabling chunks autoscaling reduces chunk size but does not change the MPI world size—you must restart the job with a higher `-np` (via your scheduler or orchestration layer) if you need more ranks.
 
 ## Interactive REPL UX
 
@@ -47,13 +47,14 @@ Run `mpirun ... ./src/deepseek_mpi --repl` when you need a chat-style workflow w
 
 - Tab switches focus between the file-path input and the prompt. Enter on the file field immediately reads the file (relative or absolute path) and appends its contents to the staged prompt; a newline is added automatically if the file does not end with one.
 - `Ctrl+K` submits the current prompt. The classic `.` on its own line still works when you want a quick send without leaving the keyboard home row.
-- `/help` prints the shortcut list, `/clear` wipes the staged buffer, `/quit` enqueues `:quit`, and `/np` reminds you to restart with a different `-np` if you need more ranks.
+- `/help` prints the shortcut list, `/clear` wipes the staged buffer, and `/quit` enqueues `:quit` if you need to bail without sending.
 - `Ctrl+C` clears whichever field currently has focus. Type `:quit`, `:exit`, `:q`, or press `Esc` to exit the REPL without submitting.
 - Enable `--tui-log-view` to mirror the most recent MPI logs inside the REPL window. Disable it (`--no-tui-log-view`) if you would rather stream stdout/stderr back to the shell.
+- `--repl-history N` bounds how many prior turns are resent in each request (default `4`, set to `0` for unlimited context) so you can keep scrollback visible without paying for infinite prompts.
 
 ### File Staging Tips
 
-- Files are pasted verbatim into the pending prompt, so monitor `--max-request-bytes` (and consider `--tasks` or chunks autoscaling) before you drop enormous attachments into the REPL.
+- Input files are MIME-sniffed before staging: plain text/code goes in verbatim, Office/LibreOffice archives are unpacked for their paragraphs/cells, and opaque binaries are summarized via base64. You still need to monitor `--max-request-bytes` (and consider `--tasks`/`--mp` or chunk autoscaling) before dropping massive blobs into the REPL.
 - Use a scratch buffer if you need to merge multiple files: load each path sequentially, edit the combined prompt in-place, then hit `Ctrl+K` once you’re satisfied.
 - Remember that staged prompts live only on rank 0 until you submit—you can press `/clear` or `Ctrl+C` repeatedly without touching previously submitted history.
 
