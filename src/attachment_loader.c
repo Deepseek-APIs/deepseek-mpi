@@ -238,6 +238,9 @@ static int mime_is_textual(const char *mime) {
 }
 
 #if defined(HAVE_LIBARCHIVE) && defined(HAVE_LIBXML2)
+#define XLSX_REL_NS "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+#define ODS_TABLE_NS "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+#define ODS_TEXT_NS "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
 static int extract_member(const char *path, const char *member, unsigned char **out, size_t *len) {
   struct archive *a = archive_read_new();
   archive_read_support_format_zip(a);
@@ -287,6 +290,96 @@ static void xml_append_text(xmlNode *node, StringBuffer *sb) {
   }
 }
 
+static void xml_collect_plain_text(xmlNode *node, StringBuffer *sb) {
+  for (xmlNode *cur = node; cur; cur = cur->next) {
+    if (cur->type == XML_TEXT_NODE || cur->type == XML_CDATA_SECTION_NODE) {
+      sb_append_str(sb, (const char *) cur->content);
+    }
+    xml_collect_plain_text(cur->children, sb);
+  }
+}
+
+static char *xml_node_plain_text_copy(xmlNode *node) {
+  if (!node) {
+    return strdup("");
+  }
+  StringBuffer sb;
+  sb_init(&sb);
+  xml_collect_plain_text(node, &sb);
+  return sb_detach(&sb);
+}
+
+static xmlNode *xml_find_child(xmlNode *parent, const char *name) {
+  if (!parent || !name) {
+    return NULL;
+  }
+  for (xmlNode *cur = parent->children; cur; cur = cur->next) {
+    if (cur->type == XML_ELEMENT_NODE && cur->name && strcmp((const char *) cur->name, name) == 0) {
+      return cur;
+    }
+  }
+  return NULL;
+}
+
+static char *dup_xml_prop(xmlNode *node, const char *name) {
+  if (!node || !name) {
+    return NULL;
+  }
+  xmlChar *value = xmlGetProp(node, (const xmlChar *) name);
+  if (!value) {
+    return NULL;
+  }
+  char *copy = strdup((const char *) value);
+  xmlFree(value);
+  return copy;
+}
+
+static char *dup_xml_ns_prop(xmlNode *node, const char *name, const char *ns) {
+  if (!node || !name) {
+    return NULL;
+  }
+  xmlChar *value = xmlGetNsProp(node, (const xmlChar *) name, ns ? (const xmlChar *) ns : NULL);
+  if (!value) {
+    return NULL;
+  }
+  char *copy = strdup((const char *) value);
+  xmlFree(value);
+  return copy;
+}
+
+static void csv_append_cell(StringBuffer *sb, const char *value, bool first_cell) {
+  if (!sb) {
+    return;
+  }
+  const char *text = value ? value : "";
+  if (!first_cell) {
+    sb_append_char(sb, ',');
+  }
+  bool needs_quotes = false;
+  for (const char *p = text; *p; ++p) {
+    if (*p == '"' || *p == ',' || *p == '\n' || *p == '\r') {
+      needs_quotes = true;
+      break;
+    }
+  }
+  if (!needs_quotes && text[0] == '\0') {
+    needs_quotes = false;
+  }
+  if (!needs_quotes) {
+    sb_append_str(sb, text);
+    return;
+  }
+  sb_append_char(sb, '"');
+  for (const char *p = text; *p; ++p) {
+    if (*p == '"') {
+      sb_append_str(sb, "\"\"");
+    } else {
+      sb_append_char(sb, *p);
+    }
+  }
+  sb_append_char(sb, '"');
+}
+
 static char *extract_docx_text(const char *path) {
   unsigned char *xml_data = NULL;
   size_t len = 0;
@@ -304,6 +397,433 @@ static char *extract_docx_text(const char *path) {
   xml_append_text(root, &sb);
   xmlFreeDoc(doc);
   return sb_detach(&sb);
+}
+
+typedef struct {
+  char **values;
+  size_t count;
+} XlsxSharedStrings;
+
+static void xlsx_shared_strings_free(XlsxSharedStrings *table) {
+  if (!table) {
+    return;
+  }
+  if (table->values) {
+    for (size_t i = 0; i < table->count; ++i) {
+      free(table->values[i]);
+    }
+  }
+  free(table->values);
+  table->values = NULL;
+  table->count = 0;
+}
+
+static int xlsx_shared_strings_load(const char *path, XlsxSharedStrings *table) {
+  if (!table) {
+    return -1;
+  }
+  table->values = NULL;
+  table->count = 0;
+  unsigned char *xml_data = NULL;
+  size_t len = 0;
+  if (extract_member(path, "xl/sharedStrings.xml", &xml_data, &len) != 0) {
+    return 0;
+  }
+  xmlDocPtr doc = xmlReadMemory((const char *) xml_data, (int) len, "xlsx-shared", NULL, XML_PARSE_RECOVER);
+  free(xml_data);
+  if (!doc) {
+    return -1;
+  }
+  xmlNode *root = xmlDocGetRootElement(doc);
+  size_t capacity = 0;
+  for (xmlNode *child = root ? root->children : NULL; child; child = child->next) {
+    if (child->type != XML_ELEMENT_NODE || strcmp((const char *) child->name, "si") != 0) {
+      continue;
+    }
+    char *text = xml_node_plain_text_copy(child);
+    if (!text) {
+      text = strdup("");
+    }
+    if (!text) {
+      xlsx_shared_strings_free(table);
+      xmlFreeDoc(doc);
+      return -1;
+    }
+    if (table->count == capacity) {
+      size_t next_cap = capacity ? capacity * 2 : 16;
+      char **next = realloc(table->values, next_cap * sizeof(char *));
+      if (!next) {
+        free(text);
+        xlsx_shared_strings_free(table);
+        xmlFreeDoc(doc);
+        return -1;
+      }
+      table->values = next;
+      capacity = next_cap;
+    }
+    table->values[table->count++] = text;
+  }
+  xmlFreeDoc(doc);
+  return 0;
+}
+
+typedef struct {
+  char *id;
+  char *target;
+} XlsxRelationship;
+
+typedef struct {
+  char *name;
+  char *path;
+} XlsxSheetInfo;
+
+static void xlsx_relationships_free(XlsxRelationship *items, size_t count) {
+  if (!items) {
+    return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    free(items[i].id);
+    free(items[i].target);
+  }
+  free(items);
+}
+
+static void xlsx_sheet_info_free(XlsxSheetInfo *items, size_t count) {
+  if (!items) {
+    return;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    free(items[i].name);
+    free(items[i].path);
+  }
+  free(items);
+}
+
+static const char *xlsx_relationship_target(const XlsxRelationship *items, size_t count, const char *id) {
+  if (!items || !id) {
+    return NULL;
+  }
+  for (size_t i = 0; i < count; ++i) {
+    if (items[i].id && strcmp(items[i].id, id) == 0) {
+      return items[i].target;
+    }
+  }
+  return NULL;
+}
+
+static char *xlsx_compose_member_path(const char *target) {
+  if (!target) {
+    return NULL;
+  }
+  const char *clean = target;
+  while (clean[0] == '.') {
+    if (clean[1] == '/' || clean[1] == '\\') {
+      clean += 2;
+    } else {
+      break;
+    }
+  }
+  while (*clean == '/' || *clean == '\\') {
+    ++clean;
+  }
+  if (strncmp(clean, "xl/", 3) == 0) {
+    return strdup(clean);
+  }
+  size_t len = strlen(clean) + 4;
+  char *path = malloc(len);
+  if (!path) {
+    return NULL;
+  }
+  snprintf(path, len, "xl/%s", clean);
+  return path;
+}
+
+static int xlsx_load_relationships(const char *path, XlsxRelationship **out_items, size_t *out_count) {
+  if (!out_items || !out_count) {
+    return -1;
+  }
+  *out_items = NULL;
+  *out_count = 0;
+  unsigned char *xml_data = NULL;
+  size_t len = 0;
+  if (extract_member(path, "xl/_rels/workbook.xml.rels", &xml_data, &len) != 0) {
+    return -1;
+  }
+  xmlDocPtr doc = xmlReadMemory((const char *) xml_data, (int) len, "rels", NULL, XML_PARSE_RECOVER);
+  free(xml_data);
+  if (!doc) {
+    return -1;
+  }
+  xmlNode *root = xmlDocGetRootElement(doc);
+  size_t capacity = 0;
+  for (xmlNode *child = root ? root->children : NULL; child; child = child->next) {
+    if (child->type != XML_ELEMENT_NODE || strcmp((const char *) child->name, "Relationship") != 0) {
+      continue;
+    }
+    char *type = dup_xml_prop(child, "Type");
+    if (!type || !strstr(type, "worksheet")) {
+      free(type);
+      continue;
+    }
+    char *id = dup_xml_prop(child, "Id");
+    char *target = dup_xml_prop(child, "Target");
+    free(type);
+    if (!id || !target) {
+      free(id);
+      free(target);
+      xlsx_relationships_free(*out_items, *out_count);
+      xmlFreeDoc(doc);
+      return -1;
+    }
+    if (*out_count == capacity) {
+      size_t next_cap = capacity ? capacity * 2 : 8;
+      XlsxRelationship *next = realloc(*out_items, next_cap * sizeof(XlsxRelationship));
+      if (!next) {
+        free(id);
+        free(target);
+        xlsx_relationships_free(*out_items, *out_count);
+        xmlFreeDoc(doc);
+        return -1;
+      }
+      *out_items = next;
+      capacity = next_cap;
+    }
+    (*out_items)[*out_count].id = id;
+    (*out_items)[*out_count].target = target;
+    (*out_count)++;
+  }
+  xmlFreeDoc(doc);
+  return 0;
+}
+
+static int xlsx_load_sheet_manifest(const char *path, XlsxSheetInfo **out_sheets, size_t *out_count) {
+  if (!out_sheets || !out_count) {
+    return -1;
+  }
+  *out_sheets = NULL;
+  *out_count = 0;
+  unsigned char *xml_data = NULL;
+  size_t len = 0;
+  if (extract_member(path, "xl/workbook.xml", &xml_data, &len) != 0) {
+    return -1;
+  }
+  xmlDocPtr doc = xmlReadMemory((const char *) xml_data, (int) len, "workbook", NULL, XML_PARSE_RECOVER);
+  free(xml_data);
+  if (!doc) {
+    return -1;
+  }
+  XlsxRelationship *rels = NULL;
+  size_t rel_count = 0;
+  if (xlsx_load_relationships(path, &rels, &rel_count) != 0) {
+    xmlFreeDoc(doc);
+    return -1;
+  }
+  size_t capacity = 0;
+  xmlNode *root = xmlDocGetRootElement(doc);
+  for (xmlNode *child = root ? root->children : NULL; child; child = child->next) {
+    if (child->type != XML_ELEMENT_NODE || strcmp((const char *) child->name, "sheets") != 0) {
+      continue;
+    }
+    for (xmlNode *sheet = child->children; sheet; sheet = sheet->next) {
+      if (sheet->type != XML_ELEMENT_NODE || strcmp((const char *) sheet->name, "sheet") != 0) {
+        continue;
+      }
+      char *name = dup_xml_prop(sheet, "name");
+      char *rid = dup_xml_ns_prop(sheet, "id", XLSX_REL_NS);
+      if (!rid) {
+        free(name);
+        continue;
+      }
+      const char *target = xlsx_relationship_target(rels, rel_count, rid);
+      char *path_copy = xlsx_compose_member_path(target);
+      if (!path_copy) {
+        free(name);
+        free(rid);
+        xlsx_sheet_info_free(*out_sheets, *out_count);
+        xlsx_relationships_free(rels, rel_count);
+        xmlFreeDoc(doc);
+        return -1;
+      }
+      if (*out_count == capacity) {
+        size_t next_cap = capacity ? capacity * 2 : 4;
+        XlsxSheetInfo *next = realloc(*out_sheets, next_cap * sizeof(XlsxSheetInfo));
+        if (!next) {
+          free(name);
+          free(rid);
+          free(path_copy);
+          xlsx_sheet_info_free(*out_sheets, *out_count);
+          xlsx_relationships_free(rels, rel_count);
+          xmlFreeDoc(doc);
+          return -1;
+        }
+        *out_sheets = next;
+        capacity = next_cap;
+      }
+      (*out_sheets)[*out_count].name = name;
+      (*out_sheets)[*out_count].path = path_copy;
+      (*out_count)++;
+      free(rid);
+    }
+  }
+  xlsx_relationships_free(rels, rel_count);
+  xmlFreeDoc(doc);
+  return 0;
+}
+
+static int xlsx_column_index_from_ref(const char *ref) {
+  if (!ref) {
+    return -1;
+  }
+  int value = 0;
+  bool seen = false;
+  for (const char *p = ref; *p; ++p) {
+    if (*p >= 'A' && *p <= 'Z') {
+      value = value * 26 + (*p - 'A' + 1);
+      seen = true;
+    } else if (*p >= 'a' && *p <= 'z') {
+      value = value * 26 + (*p - 'a' + 1);
+      seen = true;
+    } else {
+      break;
+    }
+  }
+  return seen ? value - 1 : -1;
+}
+
+static char *xlsx_cell_value(xmlNode *cell, const XlsxSharedStrings *shared) {
+  if (!cell) {
+    return strdup("");
+  }
+  char *type = dup_xml_prop(cell, "t");
+  char *result = NULL;
+  if (type && strcmp(type, "s") == 0) {
+    xmlNode *value_node = xml_find_child(cell, "v");
+    char *text = value_node ? xml_node_plain_text_copy(value_node) : NULL;
+    if (text) {
+      char *end = NULL;
+      long idx = strtol(text, &end, 10);
+      if (end && *end == '\0' && idx >= 0 && shared && (size_t) idx < shared->count) {
+        result = strdup(shared->values[idx]);
+      }
+    }
+    free(text);
+  } else if (type && strcmp(type, "inlineStr") == 0) {
+    xmlNode *is_node = xml_find_child(cell, "is");
+    if (is_node) {
+      result = xml_node_plain_text_copy(is_node);
+    }
+  } else {
+    xmlNode *value_node = xml_find_child(cell, "v");
+    if (value_node) {
+      result = xml_node_plain_text_copy(value_node);
+    } else {
+      xmlNode *is_node = xml_find_child(cell, "is");
+      if (is_node) {
+        result = xml_node_plain_text_copy(is_node);
+      }
+    }
+  }
+  free(type);
+  if (!result) {
+    result = strdup("");
+  }
+  return result;
+}
+
+static int xlsx_append_sheet_csv(const char *path, const XlsxSheetInfo *sheet, const XlsxSharedStrings *shared,
+                                 StringBuffer *out) {
+  if (!sheet || !out) {
+    return -1;
+  }
+  unsigned char *xml_data = NULL;
+  size_t len = 0;
+  if (extract_member(path, sheet->path, &xml_data, &len) != 0) {
+    return 0;
+  }
+  xmlDocPtr doc = xmlReadMemory((const char *) xml_data, (int) len, sheet->path, NULL, XML_PARSE_RECOVER);
+  free(xml_data);
+  if (!doc) {
+    return -1;
+  }
+  xmlNode *root = xmlDocGetRootElement(doc);
+  xmlNode *sheet_data = NULL;
+  for (xmlNode *child = root ? root->children : NULL; child; child = child->next) {
+    if (child->type == XML_ELEMENT_NODE && strcmp((const char *) child->name, "sheetData") == 0) {
+      sheet_data = child;
+      break;
+    }
+  }
+  if (!sheet_data) {
+    xmlFreeDoc(doc);
+    return 0;
+  }
+  if (out->length > 0) {
+    sb_append_char(out, '\n');
+  }
+  sb_append_printf(out, "# Sheet: %s\n", sheet->name ? sheet->name : "Sheet");
+  for (xmlNode *row = sheet_data->children; row; row = row->next) {
+    if (row->type != XML_ELEMENT_NODE || strcmp((const char *) row->name, "row") != 0) {
+      continue;
+    }
+    bool first_cell = true;
+    int current_col = 0;
+    for (xmlNode *cell = row->children; cell; cell = cell->next) {
+      if (cell->type != XML_ELEMENT_NODE || strcmp((const char *) cell->name, "c") != 0) {
+        continue;
+      }
+      char *ref = dup_xml_prop(cell, "r");
+      int col = xlsx_column_index_from_ref(ref);
+      free(ref);
+      if (col < 0) {
+        col = current_col;
+      }
+      while (current_col < col) {
+        csv_append_cell(out, "", first_cell);
+        first_cell = false;
+        current_col++;
+      }
+      char *value = xlsx_cell_value(cell, shared);
+      csv_append_cell(out, value, first_cell);
+      first_cell = false;
+      current_col++;
+      free(value);
+    }
+    sb_append_char(out, '\n');
+  }
+  xmlFreeDoc(doc);
+  return 0;
+}
+
+static char *convert_xlsx_to_csv(const char *path) {
+  XlsxSharedStrings shared;
+  if (xlsx_shared_strings_load(path, &shared) != 0) {
+    return NULL;
+  }
+  XlsxSheetInfo *sheets = NULL;
+  size_t sheet_count = 0;
+  if (xlsx_load_sheet_manifest(path, &sheets, &sheet_count) != 0) {
+    xlsx_shared_strings_free(&shared);
+    return NULL;
+  }
+  if (sheet_count == 0) {
+    xlsx_shared_strings_free(&shared);
+    xlsx_sheet_info_free(sheets, sheet_count);
+    return NULL;
+  }
+  StringBuffer sb;
+  sb_init(&sb);
+  for (size_t i = 0; i < sheet_count; ++i) {
+    xlsx_append_sheet_csv(path, &sheets[i], &shared, &sb);
+  }
+  xlsx_shared_strings_free(&shared);
+  xlsx_sheet_info_free(sheets, sheet_count);
+  if (sb.length == 0) {
+    sb_clean(&sb);
+    return NULL;
+  }
+  char *result = sb_detach(&sb);
+  sb_clean(&sb);
+  return result;
 }
 
 static char *extract_xlsx_text(const char *path) {
@@ -344,6 +864,136 @@ static char *extract_odf_text(const char *path) {
   return sb_detach(&sb);
 }
 
+static long ods_parse_repeat(xmlNode *node, const char *name) {
+  long repeat = 1;
+  if (!node || !name) {
+    return repeat;
+  }
+  char *value = dup_xml_ns_prop(node, name, ODS_TABLE_NS);
+  if (!value) {
+    return repeat;
+  }
+  char *end = NULL;
+  long parsed = strtol(value, &end, 10);
+  if (end && *end == '\0' && parsed > 0) {
+    repeat = parsed;
+  }
+  free(value);
+  return repeat;
+}
+
+static char *ods_cell_text(xmlNode *cell) {
+  if (!cell) {
+    return strdup("");
+  }
+  StringBuffer sb;
+  sb_init(&sb);
+  bool wrote_para = false;
+  for (xmlNode *child = cell->children; child; child = child->next) {
+    if (child->type == XML_ELEMENT_NODE && strcmp((const char *) child->name, "p") == 0) {
+      if (wrote_para) {
+        sb_append_char(&sb, '\n');
+      }
+      xml_collect_plain_text(child, &sb);
+      wrote_para = true;
+    }
+  }
+  if (!wrote_para) {
+    xml_collect_plain_text(cell, &sb);
+  }
+  return sb_detach(&sb);
+}
+
+static void ods_append_row(xmlNode *row, StringBuffer *out) {
+  if (!row || !out) {
+    return;
+  }
+  long repeat_rows = ods_parse_repeat(row, "number-rows-repeated");
+  if (repeat_rows < 1) {
+    repeat_rows = 1;
+  }
+  StringBuffer row_buffer;
+  sb_init(&row_buffer);
+  bool first_cell = true;
+  for (xmlNode *cell = row->children; cell; cell = cell->next) {
+    if (cell->type != XML_ELEMENT_NODE || strcmp((const char *) cell->name, "table-cell") != 0) {
+      continue;
+    }
+    long repeats = ods_parse_repeat(cell, "number-columns-repeated");
+    if (repeats < 1) {
+      repeats = 1;
+    }
+    char *text = ods_cell_text(cell);
+    for (long r = 0; r < repeats; ++r) {
+      csv_append_cell(&row_buffer, text, first_cell);
+      first_cell = false;
+    }
+    free(text);
+  }
+  sb_append_char(&row_buffer, '\n');
+  for (long r = 0; r < repeat_rows; ++r) {
+    sb_append(out, row_buffer.data, row_buffer.length);
+  }
+  sb_clean(&row_buffer);
+}
+
+static void ods_process_table(xmlNode *table, StringBuffer *out) {
+  if (!table || !out) {
+    return;
+  }
+  if (out->length > 0) {
+    sb_append_char(out, '\n');
+  }
+  char *name = dup_xml_ns_prop(table, "name", ODS_TABLE_NS);
+  sb_append_printf(out, "# Table: %s\n", name ? name : "Sheet");
+  free(name);
+  for (xmlNode *row = table->children; row; row = row->next) {
+    if (row->type == XML_ELEMENT_NODE && strcmp((const char *) row->name, "table-row") == 0) {
+      ods_append_row(row, out);
+    }
+  }
+}
+
+static void ods_traverse_tables(xmlNode *node, StringBuffer *out) {
+  for (xmlNode *cur = node; cur; cur = cur->next) {
+    if (cur->type == XML_ELEMENT_NODE && strcmp((const char *) cur->name, "table") == 0) {
+      ods_process_table(cur, out);
+    }
+    ods_traverse_tables(cur->children, out);
+  }
+}
+
+static char *convert_ods_to_csv(const char *path, bool flat_xml) {
+  unsigned char *xml_data = NULL;
+  size_t len = 0;
+  if (flat_xml) {
+    if (read_all_bytes(path, &xml_data, &len, NULL) != 0) {
+      return NULL;
+    }
+  } else {
+    if (extract_member(path, "content.xml", &xml_data, &len) != 0) {
+      return NULL;
+    }
+  }
+  xmlDocPtr doc = xmlReadMemory((const char *) xml_data, (int) len, "ods", NULL, XML_PARSE_RECOVER);
+  free(xml_data);
+  if (!doc) {
+    return NULL;
+  }
+  xmlNode *root = xmlDocGetRootElement(doc);
+  StringBuffer sb;
+  sb_init(&sb);
+  ods_traverse_tables(root, &sb);
+  xmlFreeDoc(doc);
+  if (sb.length == 0) {
+    sb_clean(&sb);
+    return NULL;
+  }
+  char *result = sb_detach(&sb);
+  sb_clean(&sb);
+  return result;
+}
+
 static char *extract_office_like_text(const char *path, const char *ext) {
   if (!ext) {
     return NULL;
@@ -354,10 +1004,22 @@ static char *extract_office_like_text(const char *path, const char *ext) {
   }
   if (!strcasecmp(ext, "xlsx") || !strcasecmp(ext, "xlsm") || !strcasecmp(ext, "xltx") ||
       !strcasecmp(ext, "xltm")) {
+    char *csv = convert_xlsx_to_csv(path);
+    if (csv) {
+      return csv;
+    }
     return extract_xlsx_text(path);
   }
-  if (!strcasecmp(ext, "odt") || !strcasecmp(ext, "ott") || !strcasecmp(ext, "ods") ||
-      !strcasecmp(ext, "odp") || !strcasecmp(ext, "fodt") || !strcasecmp(ext, "fods")) {
+  if (!strcasecmp(ext, "ods") || !strcasecmp(ext, "fods")) {
+    bool flat = !strcasecmp(ext, "fods");
+    char *csv = convert_ods_to_csv(path, flat);
+    if (csv) {
+      return csv;
+    }
+    return extract_odf_text(path);
+  }
+  if (!strcasecmp(ext, "odt") || !strcasecmp(ext, "ott") || !strcasecmp(ext, "odp") ||
+      !strcasecmp(ext, "fodt")) {
     return extract_odf_text(path);
   }
   return NULL;
