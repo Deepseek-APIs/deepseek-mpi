@@ -13,6 +13,7 @@ Deepseek MPI exposes a comprehensive CLI so you can control inputs, API provider
 | `--input-file PATH`, `-f PATH` | Read payload from file (`-` for stdin). |
 | `--stdin`, `-S` | Force stdin even without `--input-file -`. |
 | `--inline-text STRING`, `-T STRING` | Provide payload inline (disables TUI). |
+| `--system-prompt FILE` | Load a system prompt from `FILE` and prepend it to every request (pass an empty file to omit the system role entirely). |
 | `--tui` / `--no-tui` | Enable or disable the ncurses prompt on rank 0. |
 | `--noninteractive` | Disable both the TUI and Readline prompt, requiring `--input-file` plus an inline prompt (via `--inline-text` or trailing args). The command exits early if either input is missing. |
 | `--tasks N`, `--mp N`, `--np N` | Desired logical task count; chunk size auto-adjusts. |

@@ -24,6 +24,7 @@ enum {
   OPT_RESPONSE_FILES_ON,
   OPT_RESPONSE_FILES_OFF,
   OPT_TASKS,
+  OPT_SYSTEM_PROMPT,
   OPT_NP,
   OPT_MP,
   OPT_API_PROVIDER,
@@ -57,6 +58,7 @@ static void print_help(const char *prog) {
        "  --input-file PATH          Read payload from file (use '-' for stdin)\n"
        "  --stdin                    Force stdin for payload\n"
        "  --inline-text STRING       Provide inline text without TUI\n"
+       "  --system-prompt FILE       Read a system prompt from FILE (sent with every request)\n"
        "  --config FILE              Load key=value defaults from file\n"
        "  --log-file PATH            Redirect log output\n"
        "  --response-dir DIR         Persist each chunk response as JSON\n"
@@ -219,6 +221,7 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
       {"response-dir", required_argument, NULL, OPT_RESPONSE_DIR},
       {"response-files", no_argument, NULL, OPT_RESPONSE_FILES_ON},
       {"no-response-files", no_argument, NULL, OPT_RESPONSE_FILES_OFF},
+      {"system-prompt", required_argument, NULL, OPT_SYSTEM_PROMPT},
       {"tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_ON},
       {"no-tui-log-view", no_argument, NULL, OPT_TUI_LOG_VIEW_OFF},
       {"tasks", required_argument, NULL, OPT_TASKS},
@@ -323,6 +326,22 @@ CliResult cli_parse_args(int argc, char **argv, ProgramConfig *config) {
     case OPT_RESPONSE_DIR:
       config_replace_string(&config->response_dir, optarg);
       break;
+    case OPT_SYSTEM_PROMPT: {
+      char *contents = NULL;
+      size_t len = 0;
+      char *error = NULL;
+      if (file_loader_read_all(optarg, &contents, &len, &error) != 0) {
+        fprintf(stderr, "Failed to read system prompt %s: %s\n", optarg, error ? error : "unknown error");
+        free(error);
+        return CLI_ERROR;
+      }
+      while (len > 0 && (contents[len - 1] == '\n' || contents[len - 1] == '\r')) {
+        contents[--len] = '\0';
+      }
+      config_replace_string(&config->system_prompt, contents);
+      free(contents);
+      break;
+    }
     case OPT_RESPONSE_FILES_ON:
       config->response_files_enabled = true;
       break;

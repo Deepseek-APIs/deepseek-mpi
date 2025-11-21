@@ -116,15 +116,30 @@ static char *json_escape(const char *text, size_t len) {
 
 static const char *resolve_model(const ProgramConfig *config, ApiProvider provider);
 static int resolve_max_tokens(const ProgramConfig *config);
+static const char *resolve_system_prompt(const ProgramConfig *config);
 
 static char *build_payload_deepseek(const ProgramConfig *config, const char *chunk, size_t chunk_len) {
   const char *model = resolve_model(config, API_PROVIDER_DEEPSEEK);
   int max_tokens = resolve_max_tokens(config);
+  const char *system_prompt = resolve_system_prompt(config);
+  bool include_system = system_prompt && system_prompt[0] != '\0';
   StringBuffer buffer;
   sb_init(&buffer);
   sb_append_str(&buffer, "{\"model\":\"");
   sb_append_str(&buffer, model);
-  sb_append_str(&buffer, "\",\"messages\":[{\"role\":\"system\",\"content\":\"You are a helpful assistant.\"},{\"role\":\"user\",\"content\":\"");
+  sb_append_str(&buffer, "\",\"messages\":[");
+  if (include_system) {
+    char *escaped_system = json_escape(system_prompt, strlen(system_prompt));
+    if (!escaped_system) {
+      sb_clean(&buffer);
+      return NULL;
+    }
+    sb_append_str(&buffer, "{\"role\":\"system\",\"content\":\"");
+    sb_append_str(&buffer, escaped_system);
+    sb_append_str(&buffer, "\"},");
+    free(escaped_system);
+  }
+  sb_append_str(&buffer, "{\"role\":\"user\",\"content\":\"");
   char *escaped = json_escape(chunk, chunk_len);
   if (!escaped) {
     sb_clean(&buffer);
@@ -168,15 +183,36 @@ static int resolve_max_tokens(const ProgramConfig *config) {
   return AI_DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
+static const char *resolve_system_prompt(const ProgramConfig *config) {
+  if (config && config->system_prompt) {
+    return config->system_prompt;
+  }
+  return DEEPSEEK_DEFAULT_SYSTEM_PROMPT;
+}
+
 static char *build_payload_openai_style(const ProgramConfig *config, const char *chunk, size_t chunk_len,
                                         ApiProvider provider) {
   const char *model = resolve_model(config, provider);
   int max_tokens = resolve_max_tokens(config);
+  const char *system_prompt = resolve_system_prompt(config);
+  bool include_system = system_prompt && system_prompt[0] != '\0';
   StringBuffer buffer;
   sb_init(&buffer);
   sb_append_str(&buffer, "{\"model\":\"");
   sb_append_str(&buffer, model);
-  sb_append_str(&buffer, "\",\"messages\":[{\"role\":\"user\",\"content\":\"");
+  sb_append_str(&buffer, "\",\"messages\":[");
+  if (include_system) {
+    char *escaped_system = json_escape(system_prompt, strlen(system_prompt));
+    if (!escaped_system) {
+      sb_clean(&buffer);
+      return NULL;
+    }
+    sb_append_str(&buffer, "{\"role\":\"system\",\"content\":\"");
+    sb_append_str(&buffer, escaped_system);
+    sb_append_str(&buffer, "\"},");
+    free(escaped_system);
+  }
+  sb_append_str(&buffer, "{\"role\":\"user\",\"content\":\"");
   char *escaped = json_escape(chunk, chunk_len);
   if (!escaped) {
     sb_clean(&buffer);
@@ -195,20 +231,37 @@ static char *build_payload_openai_style(const ProgramConfig *config, const char 
 static char *build_payload_anthropic(const ProgramConfig *config, const char *chunk, size_t chunk_len) {
   const char *model = resolve_model(config, API_PROVIDER_ANTHROPIC);
   int max_tokens = resolve_max_tokens(config);
+  const char *system_prompt = resolve_system_prompt(config);
+  bool include_system = system_prompt && system_prompt[0] != '\0';
+  char *escaped_system = NULL;
+  if (include_system) {
+    escaped_system = json_escape(system_prompt, strlen(system_prompt));
+    if (!escaped_system) {
+      return NULL;
+    }
+  }
   StringBuffer buffer;
   sb_init(&buffer);
   sb_append_str(&buffer, "{\"model\":\"");
   sb_append_str(&buffer, model);
-  sb_append_printf(&buffer, "\",\"max_tokens\":%d,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"",
+  sb_append_char(&buffer, '"');
+  if (include_system) {
+    sb_append_str(&buffer, ",\"system\":\"");
+    sb_append_str(&buffer, escaped_system);
+    sb_append_char(&buffer, '"');
+  }
+  sb_append_printf(&buffer, ",\"max_tokens\":%d,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"",
                    max_tokens);
   char *escaped = json_escape(chunk, chunk_len);
   if (!escaped) {
     sb_clean(&buffer);
+    free(escaped_system);
     return NULL;
   }
   sb_append_str(&buffer, escaped);
   free(escaped);
   sb_append_str(&buffer, "\"}]}]}");
+  free(escaped_system);
   return sb_detach(&buffer);
 }
 

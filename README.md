@@ -79,6 +79,7 @@ Rank 0’s ncurses UI installs a SIGINT handler so it can restore the terminal 
 - `--chunk-size 4096` (bytes per segment)
 - `--input-file payload.txt` or `--stdin`
 - `--inline-text "quick payload"` bypasses TUI
+- `--system-prompt system.txt` reads a reusable system prompt from disk and sends it ahead of every user chunk (point it at an empty file if you want to omit the system role entirely)
 - `--repl` keeps the MPI ranks alive in a REPL-style loop so every new prompt includes prior turns
 - `--repl-history 4` (default) caps the number of turns resent to DeepSeek so the context window—and bill—stay predictable; pass `--repl-history 0` for unlimited context.
 - `--no-tui --readline` switches to a plain GNU Readline prompt; type your payload and finish with a single `.` on its own line

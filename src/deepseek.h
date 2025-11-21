@@ -18,6 +18,7 @@
 #define DEEPSEEK_DEFAULT_RESPONSE_DIR    "responses"
 #define DEEPSEEK_DEFAULT_API_ENV         "DEEPSEEK_API_KEY"
 #define DEEPSEEK_DEFAULT_MODEL           "deepseek-chat"
+#define DEEPSEEK_DEFAULT_SYSTEM_PROMPT   "You are a helpful assistant."
 #define DEEPSEEK_DEFAULT_REPL_HISTORY     4ULL
 
 #define OPENAI_DEFAULT_ENDPOINT          "https://api.openai.com/v1/chat/completions"

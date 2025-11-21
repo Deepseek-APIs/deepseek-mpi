@@ -230,6 +230,7 @@ ProgramConfig config_defaults(void) {
   cfg.config_file = NULL;
   cfg.response_dir = cfg_strdup(DEEPSEEK_DEFAULT_RESPONSE_DIR);
   cfg.model = NULL;
+  cfg.system_prompt = cfg_strdup(DEEPSEEK_DEFAULT_SYSTEM_PROMPT);
   cfg.anthropic_version = cfg_strdup(ANTHROPIC_DEFAULT_VERSION);
   cfg.target_tasks = 0;
   cfg.target_tasks_set = false;
@@ -301,6 +302,7 @@ void config_free(ProgramConfig *config) {
   free(config->config_file);
   free(config->response_dir);
   free(config->model);
+  free(config->system_prompt);
   free(config->anthropic_version);
   free(config->payload_file);
   free(config->mpirun_cmd);
@@ -314,6 +316,7 @@ void config_free(ProgramConfig *config) {
   config->response_dir = NULL;
   config->response_files_enabled = true;
   config->model = NULL;
+  config->system_prompt = NULL;
   config->anthropic_version = NULL;
   config->target_tasks = 0;
   config->target_tasks_set = false;
@@ -510,6 +513,8 @@ int config_apply_kv(ProgramConfig *config, const char *key, const char *value, c
     config->tui_log_view_explicit = true;
   } else if (strcmp(key, "model") == 0) {
     config_replace_string(&config->model, val);
+  } else if (strcmp(key, "system_prompt") == 0) {
+    config_replace_string(&config->system_prompt, val);
   } else if (strcmp(key, "anthropic_version") == 0) {
     config_replace_string(&config->anthropic_version, val);
   } else if (strcmp(key, "chunk_size") == 0) {

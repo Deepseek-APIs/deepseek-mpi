@@ -32,6 +32,7 @@ typedef struct {
   char *config_file;
   char *response_dir;
   char *model;
+  char *system_prompt;
   char *anthropic_version;
   size_t target_tasks;
   bool target_tasks_set;

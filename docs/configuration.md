@@ -35,6 +35,7 @@ If you omit `--api-provider`, the config layer auto-detects one by looking at th
 | Progress interval | `1` | Log every chunk per rank unless you increase it. |
 | Verbosity | `1` | Level 0 suppresses info logs, level 2 enables debug logs. |
 | Max output tokens | `1024` | Used when crafting OpenAI/Anthropic payloads. |
+| System prompt | `You are a helpful assistant.` | Sent as the `system` role for compatible APIs. Override via `--system-prompt file` or `system_prompt=...`; point to an empty file/string to omit it entirely. |
 | Autoscale mode | `none` | `chunks` and `threads` require explicit opt-in. |
 | Autoscale threshold | `100 MB` | Multiplies tasks/ranks when exceeded (mode dependent). |
 | Autoscale factor | `2` | Doubling is a good starting point. |
@@ -51,6 +52,7 @@ If you omit `--api-provider`, the config layer auto-detects one by looking at th
 Config files are plain `key=value` documents processed before CLI flags. Supported keys include:
 
 - Endpoint & auth: `api_endpoint`, `api_key_env`, `api_key`, `api_provider` (`deepseek`, `openai`, `anthropic`, `zai`), `model`, `anthropic_version`.
+- Prompt shaping: `system_prompt`.
 - Chunking & limits: `chunk_size`, `max_request_bytes`, `tasks`, `auto_scale_mode`, `auto_scale_threshold`, `auto_scale_factor`.
 - Reliability: `max_retries`, `network_retries`, `retry_delay_ms`, `timeout`.
 - Logging & UX: `log_file`, `response_dir`, `response_files`, `progress_interval`, `verbosity`, `show_progress`, `use_tui`, `tui_log_view`, `dry_run`, `force_quiet`.
